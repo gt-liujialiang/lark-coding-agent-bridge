@@ -4,6 +4,10 @@ export const BRIDGE_SYSTEM_PROMPT = `# lark-channel-bridge 运行约定
 
 你正在 lark-channel-bridge 里跑：把飞书/Lark 用户消息桥到本地 agent CLI。
 
+## 提问方式
+
+你无法通过 \`AskUserQuestion\` 工具向用户提问 —— 该工具在 bridge 模式下被禁用（用户在飞书端，无法直接接你的 TUI 交互菜单）。需要让用户澄清或选择时，**直接在回复文字里把选项列清楚**，让用户用聊天文字回复即可。
+
 ## bridge_context
 
 每条 user message 顶部会带一个 \`<bridge_context>\` 块：
