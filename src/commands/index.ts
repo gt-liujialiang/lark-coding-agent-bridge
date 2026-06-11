@@ -148,6 +148,30 @@ const resumeCandidates = new Map<string, ResumeCandidate>();
 const AUDIT_SAFE_COMMAND_REPLY = '命令已处理。';
 const RESUME_APPLIED_REPLY = '已完成，请继续发送下一条消息。';
 
+/**
+ * Tell the agent adapter to release any PTY or resource associated with the
+ * current session before we clear the session store entry.  The adapter's
+ * `closeSession` method is optional — Codex does not implement it.  We also
+ * guard against a missing/empty sessionId so we never fire for sessions that
+ * were created by `/timeout` before any run recorded an id.
+ */
+async function releasePreviousClaudeSession(ctx: CommandContext, scope: string): Promise<void> {
+  const prev = ctx.sessions.getRaw(scope);
+  const prevId = prev?.sessionId;
+  if (!prevId) return;
+  const close = ctx.agent.closeSession;
+  if (!close) return;
+  try {
+    await close.call(ctx.agent, prevId);
+  } catch (err) {
+    log.warn('command', 'close-session-failed', {
+      scope,
+      sessionId: prevId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 const handlers: Record<string, Handler> = {
   '/new': handleNew,
   '/reset': handleNew,
@@ -309,6 +333,7 @@ async function handleNew(args: string, ctx: CommandContext): Promise<void> {
       now: Date.now(),
     });
   }
+  await releasePreviousClaudeSession(ctx, ctx.scope);
   ctx.sessions.clear(ctx.scope);
   await reply(ctx, wasRunning ? '已中断当前任务并开始新会话。' : '已开始新会话。');
 }
@@ -370,6 +395,7 @@ async function handleCd(args: string, ctx: CommandContext): Promise<void> {
   }
   ctx.activeRuns.interrupt(ctx.scope);
   ctx.workspaces.setCwd(ctx.scope, workspace.cwdRealpath);
+  await releasePreviousClaudeSession(ctx, ctx.scope);
   ctx.sessions.clear(ctx.scope);
   await reply(ctx, `✓ 已切换 cwd 到 \`${workspace.cwdRealpath}\`\n（session 已重置）`);
 }
@@ -435,6 +461,7 @@ async function handleWsUse(name: string, ctx: CommandContext): Promise<void> {
   }
   ctx.activeRuns.interrupt(ctx.scope);
   ctx.workspaces.setCwd(ctx.scope, workspace.cwdRealpath);
+  await releasePreviousClaudeSession(ctx, ctx.scope);
   ctx.sessions.clear(ctx.scope);
   await reply(ctx, `✓ 已切换到 \`${name}\` (${workspace.cwdRealpath})\n（session 已重置）`);
 }
