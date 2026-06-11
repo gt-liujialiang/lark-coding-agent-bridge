@@ -1,5 +1,9 @@
 import { open } from 'node:fs/promises';
 
+const MIN_READ_WINDOW = 64 * 1024;        // smallest read window for tiny files
+const MAX_READ_WINDOW = 1024 * 1024;      // largest single-pass read window
+const DEFAULT_MAX_LINE_BYTES = 16 * 1024 * 1024;
+
 export interface JsonlReadResult {
   entries: Record<string, unknown>[];
   lineCount: number;
@@ -15,7 +19,7 @@ export class JsonlReader {
   private cursor = 0;
   private leftover = '';
 
-  constructor(private readonly path: string, private readonly maxLineBytes = 16 * 1024 * 1024) {}
+  constructor(private readonly path: string, private readonly maxLineBytes = DEFAULT_MAX_LINE_BYTES) {}
 
   setCursor(line: number): void {
     this.cursor = Math.max(0, Math.floor(line));
@@ -28,6 +32,10 @@ export class JsonlReader {
       handle = await open(this.path, 'r');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        // Echo the current cursor so the caller's state is preserved. If the
+        // file is being recreated, the next readNew will pick up where we
+        // left off; returning lineCount: 0 would cause syncCursorToTail()
+        // patterns to re-emit prior entries when the file reappears.
         return { entries: [], lineCount: this.cursor };
       }
       throw err;
@@ -35,7 +43,7 @@ export class JsonlReader {
     try {
       const stat = await handle.stat();
       // 1 MB read window per pass; loop until we've consumed the file.
-      const buf = Buffer.alloc(Math.min(1024 * 1024, Math.max(64 * 1024, stat.size)));
+      const buf = Buffer.alloc(Math.min(MAX_READ_WINDOW, Math.max(MIN_READ_WINDOW, stat.size)));
       const lines: string[] = [];
       let offset = 0;
       let buffered = this.leftover;
