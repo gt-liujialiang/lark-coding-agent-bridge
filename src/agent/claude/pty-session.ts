@@ -1,4 +1,6 @@
-import { homedir } from 'node:os';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { log } from '../../core/logger';
 import type { AgentEvent } from '../types';
@@ -46,10 +48,21 @@ export class PtySession {
   private busy = false;
   private interruptRequested = false;
 
+  private readonly debugDumpPath: string | undefined;
+
   constructor(private readonly opts: PtySessionOptions) {
     const home = opts.home ?? homedir();
     this.jsonlPath = sessionJsonlPath({ home, cwd: opts.cwd, sessionId: opts.sessionId });
     this.reader = new JsonlReader(this.jsonlPath);
+    // Set CLAUDE_PTY_DEBUG_DIR=/tmp/claude-pty-debug to capture raw PTY output
+    // per session for postmortem of "stuck" turns. Off by default.
+    const debugDir = process.env.CLAUDE_PTY_DEBUG_DIR;
+    if (debugDir) {
+      try {
+        mkdirSync(debugDir, { recursive: true });
+        this.debugDumpPath = join(debugDir, `${opts.sessionId}.pty`);
+      } catch { /* ignore */ }
+    }
 
     opts.pty.onData((s) => this.handleData(s));
     opts.pty.onExit((e) => {
@@ -78,6 +91,9 @@ export class PtySession {
   }
 
   private handleData(s: string): void {
+    if (this.debugDumpPath) {
+      try { appendFileSync(this.debugDumpPath, s); } catch { /* ignore */ }
+    }
     this.rollingBuffer = (this.rollingBuffer + s).slice(-ROLLING_BUFFER_BYTES);
     if (!this.acceptPressed && this.rollingBuffer.includes(ACCEPT_TRIGGER)) {
       this.acceptPressed = true;
