@@ -80,13 +80,41 @@ describe('PtySession', () => {
     const events: AgentEvent[] = [];
     for await (const ev of session.runTurn('hello')) events.push(ev);
 
-    expect(stub.writes[0]).toBe('\x1b[200~hello\x1b[201~');
+    expect(stub.writes[0]).toBe('hello');
     expect(stub.writes[1]).toBe('\r');
     expect(events).toEqual([
       { type: 'text', delta: 'hi back' },
       { type: 'usage', inputTokens: 3, outputTokens: 4, cachedInputTokens: 0 },
       { type: 'done', terminationReason: 'normal' },
     ]);
+  });
+
+  it('flattens internal newlines so the TUI sees one line + Submit', async () => {
+    const cwd = '/Users/me/proj';
+    const sessionId = 'sess-newlines';
+    const home = await makeJsonlHome(cwd, sessionId);
+    const stub = createStubPty();
+    const session = new PtySession({
+      pty: stub.handle,
+      cwd,
+      sessionId,
+      home,
+      pollMs: 10,
+      promptDelayMs: 5,
+    });
+
+    const jsonl = join(home, '.claude', 'projects', encodeCwdForClaudeProjects(cwd), `${sessionId}.jsonl`);
+    setTimeout(async () => {
+      await appendFile(jsonl, JSON.stringify({
+        type: 'assistant',
+        message: { content: [], stop_reason: 'end_turn', usage: {} },
+      }) + '\n');
+    }, 20);
+
+    for await (const _ of session.runTurn('line1\nline2\r\nline3')) { /* drain */ }
+
+    expect(stub.writes[0]).toBe('line1 line2 line3');
+    expect(stub.writes[1]).toBe('\r');
   });
 
   it('auto-presses "2" when "I accept" appears in the rolling buffer (one-time)', async () => {

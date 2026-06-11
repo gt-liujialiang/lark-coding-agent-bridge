@@ -125,15 +125,14 @@ export class PtySession {
       const translator = new JsonlTurnTranslator();
       this.interruptRequested = false;
 
-      // Wrap the prompt in bracketed-paste markers so claude's TUI treats it
-      // as a single paste — any `\n` characters become "newlines in input
-      // buffer" instead of being treated as Enter. The follow-up `\r` then
-      // arrives as a distinct keystroke and unambiguously submits.
-      // Without the brackets, a multi-line prompt blob looks like a paste to
-      // claude (heuristic on burst arrival), the `\n`s land as newlines, and
-      // the trailing `\r` is absorbed as just another in-paste newline — the
-      // turn never submits and the PTY hangs forever.
-      this.opts.pty.write('\x1b[200~' + prompt + '\x1b[201~');
+      // claude's TUI treats `\n` in input as "newline in multi-line input
+      // buffer", and in that multi-line state `\r` is also "add another
+      // line" instead of Submit. To force unambiguous submission we collapse
+      // every `\n` to a literal space — the prompt is still semantically
+      // identical for the LLM (it strips redundant whitespace anyway), but
+      // claude sees one logical line followed by Submit.
+      const singleLinePrompt = prompt.replace(/\r?\n/g, ' ');
+      this.opts.pty.write(singleLinePrompt);
       await delay(this.opts.promptDelayMs ?? DEFAULT_PROMPT_DELAY_MS);
       this.opts.pty.write('\r');
 
