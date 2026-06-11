@@ -88,4 +88,11 @@ export interface AgentAdapter {
    * Adapters that don't bake identity into their prompts may omit it.
    */
   setBotIdentity?(identity: AgentBotIdentity): void;
+  /**
+   * Bridge hook called when a Lark session's persisted state is cleared
+   * (`/new`, `/cd`, `/reset`, `/resume` to a different id). Adapters that
+   * own per-session resources (e.g., long-lived PTYs) should free them.
+   * `sessionId` is the previously-active claude session id.
+   */
+  closeSession?(sessionId: string): Promise<void>;
 }
