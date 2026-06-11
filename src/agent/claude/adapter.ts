@@ -44,7 +44,7 @@ export class ClaudeAdapter implements AgentAdapter {
     this.homeOverride = opts.homeOverride;
     this.extraEnv = opts.env ?? {};
     this.pool = new ClaudePtyPool({
-      factory: (input) => this.spawnSession(input.cwd, input.sessionId),
+      factory: (input) => this.spawnSession(input.cwd, input.sessionId, input.model),
     });
   }
 
@@ -80,7 +80,7 @@ export class ClaudeAdapter implements AgentAdapter {
     const acquire = (): Promise<PtySession> => {
       if (!acquired) {
         acquired = this.pool
-          .acquire({ cwd, sessionId: opts.sessionId })
+          .acquire({ cwd, sessionId: opts.sessionId, model: opts.model })
           .then((s) => {
             session = s as PtySession;
             acquiredId = session.sessionId;
@@ -139,11 +139,16 @@ export class ClaudeAdapter implements AgentAdapter {
     };
   }
 
-  private async spawnSession(cwdRaw: string, sessionIdHint: string | undefined): Promise<PtySessionLike> {
+  private async spawnSession(cwdRaw: string, sessionIdHint: string | undefined, model?: string): Promise<PtySessionLike> {
     // Resolve symlinks so the JSONL path we compute matches what the claude
     // process sees from process.cwd() (e.g. /var → /private/var on macOS).
     let cwd = cwdRaw;
-    try { cwd = realpathSync(cwdRaw); } catch { /* fallback to original */ }
+    try { cwd = realpathSync(cwdRaw); } catch (err) {
+      log.warn('agent', 'claude-pty-realpath-failed', {
+        cwd: cwdRaw,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
     const sessionId = sessionIdHint ?? randomUUID();
     const resume = sessionIdHint !== undefined && existsSync(
       sessionJsonlPath({ home: this.homeOverride ?? homedir(), cwd, sessionId }),
@@ -153,6 +158,8 @@ export class ClaudeAdapter implements AgentAdapter {
       '--permission-mode', CLAUDE_DEFAULT_PERMISSION_MODE,
       ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
       '--append-system-prompt', buildBridgeSystemPrompt(this.botIdentity),
+      // model is bound at PTY-spawn time; pool hits reuse the existing PTY as-is.
+      ...(model ? ['--model', model] : []),
     ];
 
     log.info('agent', 'claude-pty-spawn', { sessionId, cwd, resume });

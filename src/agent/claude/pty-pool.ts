@@ -9,6 +9,8 @@ export interface PtySessionFactoryInput {
   cwd: string;
   /** Existing claude session id to resume; undefined ⇒ assign a fresh uuid. */
   sessionId: string | undefined;
+  /** Claude model to use when spawning a new PTY. Ignored on pool hits. */
+  model?: string;
 }
 
 export type PtySessionFactory = (input: PtySessionFactoryInput) => Promise<PtySessionLike>;

@@ -13,6 +13,7 @@
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { posix } from 'node:path';
 import { createInterface } from 'node:readline';
 
 function arg(name) {
@@ -22,7 +23,9 @@ function arg(name) {
 
 const sessionId = arg('--session-id') ?? arg('--resume');
 const cwd = process.cwd();
-const encoded = cwd.replace(/\//g, '-').replace(/^-?/, '-');
+// Mirror src/agent/claude/jsonl-path.ts:encodeCwdForClaudeProjects.
+const cleaned = posix.normalize(cwd).replace(/\/+$/, '');
+const encoded = cleaned.replace(/\//g, '-');
 const jsonl = join(homedir(), '.claude', 'projects', encoded, `${sessionId}.jsonl`);
 mkdirSync(dirname(jsonl), { recursive: true });
 if (!existsSync(jsonl)) writeFileSync(jsonl, '');
