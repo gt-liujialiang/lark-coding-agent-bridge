@@ -80,7 +80,7 @@ describe('PtySession', () => {
     const events: AgentEvent[] = [];
     for await (const ev of session.runTurn('hello')) events.push(ev);
 
-    expect(stub.writes[0]).toBe('hello');
+    expect(stub.writes[0]).toBe('\x1b[200~hello\x1b[201~');
     expect(stub.writes[1]).toBe('\r');
     expect(events).toEqual([
       { type: 'text', delta: 'hi back' },
