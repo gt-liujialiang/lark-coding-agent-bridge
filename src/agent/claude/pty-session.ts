@@ -27,6 +27,15 @@ const DEFAULT_POLL_MS = 300;
 const DEFAULT_PROMPT_DELAY_MS = 200;
 const DEFAULT_MAX_TURN_MS = 10 * 60 * 1000;
 
+// Strip CSI / OSC / other ANSI escape sequences from PTY output so error
+// messages we surface to users are readable plain text.
+function stripAnsi(s: string): string {
+  return s.replace(
+    /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][\s\S]*?(?:\x07|\x1b\\)|[PX^_][\s\S]*?(?:\x1b\\|\x07)|[@-Z\\-_])/g,
+    '',
+  );
+}
+
 export class PtySession {
   private readonly jsonlPath: string;
   private readonly reader: JsonlReader;
@@ -46,6 +55,13 @@ export class PtySession {
     opts.pty.onExit((e) => {
       this.alive = false;
       this.exitInfo = e;
+      const tail = stripAnsi(this.rollingBuffer).trim().slice(-800);
+      log.warn('agent', 'claude-pty-exit', {
+        sessionId: this.opts.sessionId,
+        exitCode: e.exitCode,
+        signal: e.signal,
+        tail: tail || undefined,
+      });
     });
   }
 
@@ -102,9 +118,11 @@ export class PtySession {
 
       while (true) {
         if (!this.alive) {
+          const tail = stripAnsi(this.rollingBuffer).trim().slice(-800);
+          const detail = tail ? `: ${tail}` : '';
           yield {
             type: 'error',
-            message: `claude PTY exited (code ${this.exitInfo?.exitCode ?? '?'}${this.exitInfo?.signal ? `, signal ${this.exitInfo.signal}` : ''})`,
+            message: `claude PTY exited (code ${this.exitInfo?.exitCode ?? '?'}${this.exitInfo?.signal ? `, signal ${this.exitInfo.signal}` : ''})${detail}`,
             terminationReason: 'failed',
           };
           return;
