@@ -59,6 +59,27 @@ describe('closeSession integration — /new, /reset, /cd', () => {
     expect(h.agent.closeSession).toHaveBeenCalledWith('session-cd-old');
     expect(h.sessions.getRaw('chat-1')).toBeUndefined();
   });
+
+  it('calls closeSession with the previous sessionId when /resume use switches to a different session', async () => {
+    const h = await createHarness();
+    h.sessions.set('chat-1', 'sess-old', h.tmp.workspace);
+
+    await expect(h.run('/resume use sess-new')).resolves.toBe(true);
+
+    expect(h.agent.closeSession).toHaveBeenCalledTimes(1);
+    expect(h.agent.closeSession).toHaveBeenCalledWith('sess-old');
+    expect(h.sessions.getRaw('chat-1')?.sessionId).toBe('sess-new');
+  });
+
+  it('does NOT call closeSession when /resume use is called with the same session id', async () => {
+    const h = await createHarness();
+    h.sessions.set('chat-1', 'sess-same', h.tmp.workspace);
+
+    await expect(h.run('/resume use sess-same')).resolves.toBe(true);
+
+    expect(h.agent.closeSession).not.toHaveBeenCalled();
+    expect(h.sessions.getRaw('chat-1')?.sessionId).toBe('sess-same');
+  });
 });
 
 async function createHarness(): Promise<Harness> {

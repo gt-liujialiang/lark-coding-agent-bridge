@@ -608,6 +608,27 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
 }
 
 async function applyResume(sessionId: string, ctx: CommandContext): Promise<void> {
+  // Capture the previous session id so we can release its PTY when switching
+  // to a different session.  If the user resumes the exact same id that is
+  // already active we must NOT close the PTY — it would kill the live session.
+  const prevSessionId = ctx.sessions.getRaw(ctx.scope)?.sessionId;
+
+  /** Release the previous PTY iff we are actually switching to a new id. */
+  async function releasePrevIfDifferent(newId: string): Promise<void> {
+    if (!prevSessionId || prevSessionId === newId) return;
+    const close = ctx.agent.closeSession;
+    if (!close) return;
+    try {
+      await close.call(ctx.agent, prevSessionId);
+    } catch (err) {
+      log.warn('command', 'close-session-failed', {
+        scope: ctx.scope,
+        sessionId: prevSessionId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   if (ctx.sessionCatalog && ctx.sessionCatalogIdentity) {
     const entry = ctx.sessionCatalog.activeFor(ctx.sessionCatalogIdentity);
     const resolved = consumeResumeCandidate(sessionId, ctx.sessionCatalogIdentity);
@@ -629,6 +650,7 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
           policyFingerprint: ctx.sessionCatalogIdentity.policyFingerprint,
           sessionId: resolved.sessionId!,
         });
+        await releasePrevIfDifferent(resolved.sessionId!);
         ctx.sessions.set(ctx.scope, resolved.sessionId!, ctx.sessionCatalogIdentity.cwdRealpath);
       }
       await reply(ctx, RESUME_APPLIED_REPLY);
@@ -645,6 +667,7 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
     }
     ctx.activeRuns.interrupt(ctx.scope);
     if (ctx.sessionCatalogIdentity.agentId === 'claude') {
+      await releasePrevIfDifferent(sessionId);
       ctx.sessions.set(ctx.scope, sessionId, ctx.sessionCatalogIdentity.cwdRealpath);
     }
     await reply(ctx, RESUME_APPLIED_REPLY);
@@ -662,6 +685,7 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
     return;
   }
   ctx.activeRuns.interrupt(ctx.scope);
+  await releasePrevIfDifferent(sessionId);
   ctx.sessions.set(ctx.scope, sessionId, cwd);
   await reply(ctx, RESUME_APPLIED_REPLY);
 }
