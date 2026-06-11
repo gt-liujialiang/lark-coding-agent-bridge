@@ -47,6 +47,7 @@
     "commander": "^12.1.0",
     "cross-spawn": "^7.0.6",
     "graceful-fs": "^4.2.11",
+    "node-pty": "^1.0.0",
     "proper-lockfile": "^4.1.2",
     "qrcode-terminal": "^0.12.0"
   },
@@ -66,6 +67,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
+      "node-pty",
       "protobufjs"
     ]
   },

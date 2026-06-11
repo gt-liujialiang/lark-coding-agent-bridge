@@ -18,6 +18,7 @@
 
 ## 前置条件
 
+- macOS 或 Linux。**自 0.4.0 起不再支持 Windows**（Claude 适配器改用基于 PTY 的会话管理器，未在 Windows 上验证）。Codex 不受影响。
 - Node.js **>= 20.12.0**
 - 本机至少安装并登录一个 agent：
   - Claude Code：`claude`，安装说明：https://docs.anthropic.com/en/docs/claude-code/quickstart

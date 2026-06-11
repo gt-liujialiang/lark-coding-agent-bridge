@@ -18,6 +18,9 @@ For a product walkthrough, see the [Feishu document](https://larkcommunity.feish
 
 ## Prerequisites
 
+- macOS or Linux. **Windows is not supported as of 0.4.0** (the Claude adapter
+  now relies on a PTY-based session manager that is not validated on Windows).
+  Codex is unaffected.
 - Node.js **>= 20.12.0**
 - At least one local agent installed and logged in:
   - Claude Code: `claude`, see https://docs.anthropic.com/en/docs/claude-code/quickstart
