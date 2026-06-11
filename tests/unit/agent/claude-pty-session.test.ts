@@ -76,6 +76,11 @@ describe('PtySession', () => {
           usage: { input_tokens: 3, output_tokens: 4 },
         },
       }) + '\n');
+      await appendFile(jsonl, JSON.stringify({
+        type: 'system',
+        subtype: 'turn_duration',
+        durationMs: 1,
+      }) + '\n');
     }, 20);
 
     const events: AgentEvent[] = [];
@@ -110,6 +115,11 @@ describe('PtySession', () => {
       await appendFile(jsonl, JSON.stringify({
         type: 'assistant',
         message: { content: [], stop_reason: 'end_turn', usage: {} },
+      }) + '\n');
+      await appendFile(jsonl, JSON.stringify({
+        type: 'system',
+        subtype: 'turn_duration',
+        durationMs: 1,
       }) + '\n');
     }, 20);
 

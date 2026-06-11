@@ -27,8 +27,14 @@ interface UserMessage {
   content?: ContentBlock[];
 }
 
+interface SystemEntry {
+  type?: string;
+  subtype?: string;
+}
+
 interface JsonlEntry {
   type?: string;
+  subtype?: string;
   message?: AssistantMessage | UserMessage;
 }
 
@@ -37,9 +43,17 @@ interface JsonlEntry {
  * end-of-turn usage event correctly sums only the turn's assistant entries.
  *
  * Reads JSONL records written to `~/.claude/projects/<encoded>/<id>.jsonl`
- * and emits the bridge's `AgentEvent`. When an assistant entry carries
- * `stop_reason: "end_turn"`, the translator synthesizes a `usage` event
- * (summed across the turn) followed by a `done` event.
+ * and emits the bridge's `AgentEvent`.
+ *
+ * **Turn-end detection:** assistant entries with `stop_reason === "end_turn"`
+ * are NOT reliable as turn boundaries by themselves — when claude does
+ * Extended Thinking, it splits the response into a *thinking-only* assistant
+ * entry (signature-only, no visible text) with `stop_reason: end_turn`,
+ * followed by a *text* assistant entry (also `stop_reason: end_turn`) that
+ * holds the user-visible reply. If we emit `done` on the first one we lose
+ * the second one. The reliable signal is a `system` entry with
+ * `subtype: "turn_duration"`, written after all assistant content for the
+ * turn — we emit `usage` + `done` then.
  */
 export class JsonlTurnTranslator {
   private inputTokens = 0;
@@ -65,6 +79,9 @@ export class JsonlTurnTranslator {
         this.outputTokens += u.output_tokens ?? 0;
         this.cachedInputTokens += u.cache_read_input_tokens ?? 0;
       }
+      if (message?.stop_reason === 'end_turn') {
+        this._endTurnSeen = true;
+      }
       for (const block of message?.content ?? []) {
         if (block.type === 'text' && typeof block.text === 'string' && block.text) {
           yield { type: 'text', delta: block.text };
@@ -73,16 +90,6 @@ export class JsonlTurnTranslator {
         } else if (block.type === 'tool_use' && block.id && block.name) {
           yield { type: 'tool_use', id: block.id, name: block.name, input: block.input };
         }
-      }
-      if (message?.stop_reason === 'end_turn' && !this._endTurnSeen) {
-        this._endTurnSeen = true;
-        yield {
-          type: 'usage',
-          inputTokens: this.inputTokens,
-          outputTokens: this.outputTokens,
-          cachedInputTokens: this.cachedInputTokens,
-        };
-        yield { type: 'done', terminationReason: 'normal' };
       }
       return;
     }
@@ -99,6 +106,19 @@ export class JsonlTurnTranslator {
             isError: block.is_error === true,
           };
         }
+      }
+      return;
+    }
+    if (entry.type === 'system') {
+      const sys = raw as SystemEntry;
+      if (sys.subtype === 'turn_duration' && this._endTurnSeen) {
+        yield {
+          type: 'usage',
+          inputTokens: this.inputTokens,
+          outputTokens: this.outputTokens,
+          cachedInputTokens: this.cachedInputTokens,
+        };
+        yield { type: 'done', terminationReason: 'normal' };
       }
     }
   }

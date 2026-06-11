@@ -60,7 +60,7 @@ describe('JsonlTurnTranslator', () => {
     ]);
   });
 
-  it('synthesizes usage + done on end_turn, summing tokens across assistant entries', () => {
+  it('synthesizes usage + done only when system.turn_duration arrives (after all assistant entries)', () => {
     const events = run([
       {
         type: 'assistant',
@@ -71,13 +71,13 @@ describe('JsonlTurnTranslator', () => {
       },
       {
         type: 'assistant',
-        sessionId: 'sess-xyz',
         message: {
           content: [{ type: 'text', text: 'final' }],
           stop_reason: 'end_turn',
           usage: { input_tokens: 1, cache_read_input_tokens: 1, output_tokens: 7 },
         },
       },
+      { type: 'system', subtype: 'turn_duration', durationMs: 1234 },
     ]);
     expect(events).toEqual([
       { type: 'text', delta: 'first half' },
@@ -85,6 +85,32 @@ describe('JsonlTurnTranslator', () => {
       { type: 'usage', inputTokens: 17, outputTokens: 12, cachedInputTokens: 4 },
       { type: 'done', terminationReason: 'normal' },
     ]);
+  });
+
+  it('survives the Extended-Thinking case: thinking-only end_turn entry followed by text entry', () => {
+    // Repro of the real-claude scenario where the response is split into two
+    // assistant entries both carrying stop_reason="end_turn" — the first one
+    // is signature-only thinking with no text, the second one holds the
+    // actual reply. We must NOT emit `done` after the first entry; we wait
+    // for the system.turn_duration marker.
+    const events = run([
+      { type: 'assistant', message: { content: [{ type: 'thinking', thinking: '' }], stop_reason: 'end_turn' } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'the real reply' }], stop_reason: 'end_turn' } },
+      { type: 'system', subtype: 'turn_duration', durationMs: 1 },
+    ]);
+    expect(events).toEqual([
+      { type: 'text', delta: 'the real reply' },
+      { type: 'usage', inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 },
+      { type: 'done', terminationReason: 'normal' },
+    ]);
+  });
+
+  it('does not emit done from turn_duration when no assistant end_turn was seen', () => {
+    // turn_duration without a preceding end_turn should be a no-op
+    // (defensive — shouldn't happen in practice).
+    expect(run([
+      { type: 'system', subtype: 'turn_duration', durationMs: 100 },
+    ])).toEqual([]);
   });
 
   it('ignores unknown / empty / partial entries', () => {

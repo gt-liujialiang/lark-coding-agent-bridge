@@ -54,6 +54,12 @@ rl.on('line', () => {
     },
   ];
   for (const e of entries) appendFileSync(jsonl, JSON.stringify(e) + '\n');
+  // Mirror real claude: append a turn_duration system entry as the actual
+  // turn-end marker (the translator uses this as the done trigger).
+  appendFileSync(
+    jsonl,
+    JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 1 }) + '\n',
+  );
   turnIdx += 1;
   if (crashAfter >= 0 && turnIdx >= crashAfter) process.exit(1);
   if (exitAfter >= 0 && turnIdx >= exitAfter) process.exit(0);
