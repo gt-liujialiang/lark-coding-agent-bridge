@@ -81,7 +81,7 @@ describe('ClaudeAdapter system prompt wiring', () => {
       return capturedHandle;
     });
 
-    const adapter = new ClaudeAdapter();
+    const adapter = new ClaudeAdapter({ readinessQuietMs: 0 });
     adapter.setBotIdentity({ openId: 'ou_bot_self', name: 'Bridge' });
 
     // Start iterating events — this triggers pool.acquire → spawnSession → spawnPty.
@@ -117,7 +117,7 @@ describe('ClaudeAdapter system prompt wiring', () => {
       return capturedHandle;
     });
 
-    const adapter = new ClaudeAdapter();
+    const adapter = new ClaudeAdapter({ readinessQuietMs: 0 });
 
     const run = adapter.run({ runId: 'r1', prompt: 'hi', cwd: '/tmp' });
     const collectPromise = (async () => {

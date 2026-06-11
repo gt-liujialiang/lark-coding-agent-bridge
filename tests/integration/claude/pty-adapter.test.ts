@@ -37,6 +37,7 @@ describe('ClaudeAdapter (PTY)', () => {
     const adapter = new ClaudeAdapter({
       binary: fakeBinary,
       homeOverride: home,
+      readinessQuietMs: 0,
       env: { FAKE_CLAUDE_TURNS_JSON: JSON.stringify(turns) },
     });
 
@@ -62,6 +63,7 @@ describe('ClaudeAdapter (PTY)', () => {
     const adapter = new ClaudeAdapter({
       binary: fakeBinary,
       homeOverride: home,
+      readinessQuietMs: 0,
       env: {
         FAKE_CLAUDE_RECORD_ARGS_PATH: argsFile,
         FAKE_CLAUDE_TURNS_JSON: JSON.stringify([
@@ -91,6 +93,7 @@ describe('ClaudeAdapter (PTY)', () => {
     const adapter = new ClaudeAdapter({
       binary: fakeBinary,
       homeOverride: home,
+      readinessQuietMs: 0,
       env: { FAKE_CLAUDE_TURNS_JSON: JSON.stringify([
         [{ type: 'assistant', message: { content: [{ type: 'text', text: 'one' }], stop_reason: 'end_turn', usage: {} } }],
       ]) },

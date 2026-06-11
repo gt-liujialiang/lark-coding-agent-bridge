@@ -58,6 +58,7 @@ describe('PtySession', () => {
       home,
       pollMs: 10,
       promptDelayMs: 5,
+      readinessQuietMs: 0,
     });
 
     // Pre-populate the JSONL with two entries so runTurn finds them quickly.
@@ -101,6 +102,7 @@ describe('PtySession', () => {
       home,
       pollMs: 10,
       promptDelayMs: 5,
+      readinessQuietMs: 0,
     });
 
     const jsonl = join(home, '.claude', 'projects', encodeCwdForClaudeProjects(cwd), `${sessionId}.jsonl`);
@@ -117,9 +119,9 @@ describe('PtySession', () => {
     expect(stub.writes[1]).toBe('\r');
   });
 
-  it('auto-presses "2" when "I accept" appears in the rolling buffer (one-time)', async () => {
+  it('handles the "trust this folder" consent dialog by pressing Enter (one-time)', async () => {
     const cwd = '/Users/me/proj';
-    const sessionId = 'sess-2';
+    const sessionId = 'sess-trust';
     const home = await makeJsonlHome(cwd, sessionId);
     const stub = createStubPty();
     const session = new PtySession({
@@ -129,20 +131,47 @@ describe('PtySession', () => {
       home,
       pollMs: 10,
       promptDelayMs: 5,
+      readinessQuietMs: 0,
     });
     void session;
 
-    // Emit the banner before the turn starts.
-    stub.emitData('Bypass Permissions mode\n\n  1. No\n  2. Yes, I accept\n');
+    stub.emitData('Quick safety check: Is this a project you trust?\n  1. Yes, I trust this folder\n  2. No, exit\n');
 
-    // Wait one tick so the listener consumes data.
-    await new Promise((r) => setTimeout(r, 20));
+    // Dialog response is debounced 100ms so the redraw settles first.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(stub.writes).toContain('\r');
+    const trustPresses = stub.writes.filter((w) => w === '\r').length;
+    expect(trustPresses).toBeGreaterThanOrEqual(1);
+
+    // Re-emitting the same string must not re-press.
+    stub.emitData('Yes, I trust this folder\n');
+    await new Promise((r) => setTimeout(r, 150));
+    expect(stub.writes.filter((w) => w === '\r').length).toBe(trustPresses);
+  });
+
+  it('handles the "Bypass Permissions" consent by pressing 2 (one-time)', async () => {
+    const cwd = '/Users/me/proj';
+    const sessionId = 'sess-bypass';
+    const home = await makeJsonlHome(cwd, sessionId);
+    const stub = createStubPty();
+    const session = new PtySession({
+      pty: stub.handle,
+      cwd,
+      sessionId,
+      home,
+      pollMs: 10,
+      promptDelayMs: 5,
+      readinessQuietMs: 0,
+    });
+    void session;
+
+    stub.emitData('Bypass Permissions mode\n  1. No, exit\n  2. Yes, I accept\n');
+    await new Promise((r) => setTimeout(r, 200));
     expect(stub.writes).toContain('2\r');
 
-    // The same string appearing again must not re-press.
     const before = stub.writes.filter((w) => w === '2\r').length;
-    stub.emitData('I accept\n');
-    await new Promise((r) => setTimeout(r, 10));
+    stub.emitData('Yes, I accept\n');
+    await new Promise((r) => setTimeout(r, 150));
     expect(stub.writes.filter((w) => w === '2\r').length).toBe(before);
   });
 
@@ -158,6 +187,7 @@ describe('PtySession', () => {
       home,
       pollMs: 10,
       promptDelayMs: 5,
+      readinessQuietMs: 0,
     });
 
     const iter = session.runTurn('long task')[Symbol.asyncIterator]();
@@ -182,6 +212,7 @@ describe('PtySession', () => {
       home,
       pollMs: 10,
       promptDelayMs: 5,
+      readinessQuietMs: 0,
     });
 
     setTimeout(() => stub.emitExit(1, undefined), 30);

@@ -21,13 +21,37 @@ export interface PtySessionOptions {
   promptDelayMs?: number;
   /** Max turn duration (ms) before soft-interrupt + timeout error. */
   maxTurnMs?: number;
+  /** Quiet-window required for first-turn readiness. Default 1000ms. */
+  readinessQuietMs?: number;
+  /** Max wait for first-turn readiness. Default 30000ms. */
+  readinessMaxMs?: number;
 }
 
-const ACCEPT_TRIGGER = 'I accept';
-const ROLLING_BUFFER_BYTES = 4096;
+// Startup consent dialogs claude shows on first use of a cwd / mode.
+// Each pattern is matched against the (ANSI-stripped) rolling PTY buffer.
+// On match we send `response`, and the dialog is treated as "handled" so we
+// don't re-press if the same text reappears in scrollback.
+interface ConsentDialog {
+  name: string;
+  pattern: RegExp;
+  response: string;
+}
+const CONSENT_DIALOGS: ConsentDialog[] = [
+  // "Quick safety check: Is this a project you trust?" — first time in a cwd.
+  //   1. Yes, I trust this folder   2. No, exit   Enter to confirm
+  // Default highlight is option 1; \r confirms.
+  { name: 'trust-folder', pattern: /Yes,\s*I\s*trust\s*this\s*folder/i, response: '\r' },
+  // "Bypass Permissions mode" warning — first time under --permission-mode bypassPermissions.
+  //   1. No, exit   2. Yes, I accept
+  { name: 'bypass-permissions', pattern: /Yes,\s*I\s*accept/i, response: '2\r' },
+];
+
+const ROLLING_BUFFER_BYTES = 8192;
 const DEFAULT_POLL_MS = 300;
 const DEFAULT_PROMPT_DELAY_MS = 200;
 const DEFAULT_MAX_TURN_MS = 10 * 60 * 1000;
+const READINESS_MAX_MS = 30_000;
+const READINESS_QUIET_MS = 1_000;
 
 // Strip CSI / OSC / other ANSI escape sequences from PTY output so error
 // messages we surface to users are readable plain text.
@@ -42,7 +66,9 @@ export class PtySession {
   private readonly jsonlPath: string;
   private readonly reader: JsonlReader;
   private rollingBuffer = '';
-  private acceptPressed = false;
+  private readonly handledDialogs = new Set<string>();
+  private lastDataAt = 0;
+  private firstReady = false;
   private alive = true;
   private exitInfo: { exitCode: number; signal?: number } | undefined;
   private busy = false;
@@ -95,11 +121,58 @@ export class PtySession {
       try { appendFileSync(this.debugDumpPath, s); } catch { /* ignore */ }
     }
     this.rollingBuffer = (this.rollingBuffer + s).slice(-ROLLING_BUFFER_BYTES);
-    if (!this.acceptPressed && this.rollingBuffer.includes(ACCEPT_TRIGGER)) {
-      this.acceptPressed = true;
-      this.opts.pty.write('2\r');
-      log.info('agent', 'claude-bypass-accept', { sessionId: this.opts.sessionId });
+    this.lastDataAt = Date.now();
+    // Strip ANSI before matching dialogs — claude wraps option labels with
+    // color/style codes that can otherwise split the substring we look for.
+    const visible = stripAnsi(this.rollingBuffer);
+    for (const dialog of CONSENT_DIALOGS) {
+      if (this.handledDialogs.has(dialog.name)) continue;
+      if (dialog.pattern.test(visible)) {
+        this.handledDialogs.add(dialog.name);
+        log.info('agent', 'claude-consent', {
+          sessionId: this.opts.sessionId,
+          dialog: dialog.name,
+        });
+        // Brief delay so the dialog finishes rendering before our key lands.
+        setTimeout(() => this.opts.pty.write(dialog.response), 100);
+      }
     }
+  }
+
+  /**
+   * Block until claude's TUI is past its boot screen and any consent dialogs
+   * so the first prompt isn't eaten. We treat "no PTY data for
+   * READINESS_QUIET_MS, after we've seen *some* data" as ready. If a consent
+   * dialog handler fires, the quiet-window timer resets — its keystroke
+   * causes a redraw, and we wait for the next quiet period.
+   */
+  private async waitForReady(): Promise<void> {
+    if (this.firstReady) return;
+    const quietMs = this.opts.readinessQuietMs ?? READINESS_QUIET_MS;
+    const maxMs = this.opts.readinessMaxMs ?? READINESS_MAX_MS;
+    const deadline = Date.now() + maxMs;
+    // Need at least *some* data before we declare ready (rules out the case
+    // where claude hasn't drawn anything yet but is mid-boot). If the caller
+    // configured quietMs=0, skip this gate entirely (test mode).
+    if (quietMs > 0) {
+      while (this.lastDataAt === 0 && Date.now() < deadline) {
+        await delay(10);
+      }
+    }
+    while (Date.now() < deadline) {
+      const idle = Date.now() - this.lastDataAt;
+      if (idle >= quietMs) {
+        this.firstReady = true;
+        return;
+      }
+      await delay(Math.max(10, quietMs - idle));
+    }
+    // Timed out — proceed anyway; caller may still succeed.
+    log.warn('agent', 'claude-pty-ready-timeout', {
+      sessionId: this.opts.sessionId,
+      bufferTail: stripAnsi(this.rollingBuffer).trim().slice(-200),
+    });
+    this.firstReady = true;
   }
 
   /**
@@ -121,6 +194,12 @@ export class PtySession {
     if (this.busy) throw new Error('PtySession.runTurn called while previous turn is running');
     this.busy = true;
     try {
+      // First turn only: wait for claude's TUI to finish booting (and any
+      // consent dialogs to be handled) before writing the prompt. Otherwise
+      // our keystrokes get eaten by the boot/dialog and the prompt never
+      // submits.
+      await this.waitForReady();
+
       await this.syncCursorToTail();
       const translator = new JsonlTurnTranslator();
       this.interruptRequested = false;

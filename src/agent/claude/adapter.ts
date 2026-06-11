@@ -25,6 +25,8 @@ export interface ClaudeAdapterOptions {
   homeOverride?: string;
   /** Test-only: extra env to pass into the spawned claude. */
   env?: Record<string, string>;
+  /** Test-only: override the first-turn readiness quiet window (ms). 0 = skip. */
+  readinessQuietMs?: number;
 }
 
 export class ClaudeAdapter implements AgentAdapter {
@@ -35,6 +37,7 @@ export class ClaudeAdapter implements AgentAdapter {
   private readonly larkChannel: LarkChannelEnvContext | undefined;
   private readonly homeOverride: string | undefined;
   private readonly extraEnv: Record<string, string>;
+  private readonly readinessQuietMs: number | undefined;
   private botIdentity: AgentBotIdentity | undefined;
   private readonly pool: ClaudePtyPool;
 
@@ -43,6 +46,7 @@ export class ClaudeAdapter implements AgentAdapter {
     this.larkChannel = opts.larkChannel;
     this.homeOverride = opts.homeOverride;
     this.extraEnv = opts.env ?? {};
+    this.readinessQuietMs = opts.readinessQuietMs;
     this.pool = new ClaudePtyPool({
       factory: (input) => this.spawnSession(input.cwd, input.sessionId, input.model, input.permissionMode),
     });
@@ -177,6 +181,7 @@ export class ClaudeAdapter implements AgentAdapter {
       cwd,
       sessionId,
       ...(this.homeOverride ? { home: this.homeOverride } : {}),
+      ...(this.readinessQuietMs !== undefined ? { readinessQuietMs: this.readinessQuietMs } : {}),
     });
   }
 }

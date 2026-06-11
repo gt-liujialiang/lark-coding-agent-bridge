@@ -27,7 +27,7 @@ const sessionId = arg('--session-id') ?? arg('--resume');
 const cwd = process.cwd();
 // Mirror src/agent/claude/jsonl-path.ts:encodeCwdForClaudeProjects.
 const cleaned = posix.normalize(cwd).replace(/\/+$/, '');
-const encoded = cleaned.replace(/\//g, '-');
+const encoded = cleaned.replace(/[^a-zA-Z0-9-]/g, '-');
 const jsonl = join(homedir(), '.claude', 'projects', encoded, `${sessionId}.jsonl`);
 mkdirSync(dirname(jsonl), { recursive: true });
 if (!existsSync(jsonl)) writeFileSync(jsonl, '');
