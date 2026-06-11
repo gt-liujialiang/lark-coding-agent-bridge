@@ -10,6 +10,8 @@
 //     session JSONL file (one entry per line).
 //   FAKE_CLAUDE_EXIT_AFTER=<n> → exit cleanly after n turns
 //   FAKE_CLAUDE_CRASH_AFTER=<n> → exit 1 after n turns
+//   FAKE_CLAUDE_RECORD_ARGS_PATH=<file> → write process.argv.slice(2) as JSON
+//     to <file> on startup; useful for asserting flags like --permission-mode.
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -29,6 +31,10 @@ const encoded = cleaned.replace(/\//g, '-');
 const jsonl = join(homedir(), '.claude', 'projects', encoded, `${sessionId}.jsonl`);
 mkdirSync(dirname(jsonl), { recursive: true });
 if (!existsSync(jsonl)) writeFileSync(jsonl, '');
+
+if (process.env.FAKE_CLAUDE_RECORD_ARGS_PATH) {
+  writeFileSync(process.env.FAKE_CLAUDE_RECORD_ARGS_PATH, JSON.stringify(process.argv.slice(2)));
+}
 
 if (process.env.FAKE_CLAUDE_BANNER) {
   process.stdout.write('Bypass Permissions mode\n  1. No\n  2. Yes, I accept\n');

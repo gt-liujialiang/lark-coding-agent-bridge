@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,6 +49,36 @@ describe('ClaudeAdapter (PTY)', () => {
     const r2 = adapter.run({ runId: 'r2', prompt: 'again', cwd, sessionId });
     const e2 = await collect(r2.events);
     expect(e2.find((e) => e.type === 'text')).toEqual({ type: 'text', delta: 'b' });
+
+    await adapter.closeSession?.(sessionId!);
+  });
+
+  it('forwards permissionMode to the spawned PTY process', { timeout: 30000 }, async () => {
+    const home = await mkdtemp(join(tmpdir(), 'claude-pty-home-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'claude-pty-cwd-'));
+    const argsFile = join(tmpdir(), `claude-args-${Date.now()}.json`);
+    dirs.push(home, cwd);
+
+    const adapter = new ClaudeAdapter({
+      binary: fakeBinary,
+      homeOverride: home,
+      env: {
+        FAKE_CLAUDE_RECORD_ARGS_PATH: argsFile,
+        FAKE_CLAUDE_TURNS_JSON: JSON.stringify([
+          [{ type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } } }],
+        ]),
+      },
+    });
+
+    const r = adapter.run({ runId: 'r-pm', prompt: 'hi', cwd, permissionMode: 'acceptEdits' });
+    const events = await collect(r.events);
+    const sessionId = (events.find((e) => e.type === 'system') as { sessionId?: string } | undefined)?.sessionId;
+    expect(sessionId).toBeTruthy();
+
+    const recorded = JSON.parse(await readFile(argsFile, 'utf8')) as string[];
+    const pmIdx = recorded.indexOf('--permission-mode');
+    expect(pmIdx).toBeGreaterThanOrEqual(0);
+    expect(recorded[pmIdx + 1]).toBe('acceptEdits');
 
     await adapter.closeSession?.(sessionId!);
   });

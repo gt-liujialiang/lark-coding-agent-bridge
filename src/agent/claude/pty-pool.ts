@@ -11,6 +11,9 @@ export interface PtySessionFactoryInput {
   sessionId: string | undefined;
   /** Claude model to use when spawning a new PTY. Ignored on pool hits. */
   model?: string;
+  /** Optional permission mode. Baked at PTY spawn time; pool hit keeps the
+   * existing PTY's permission mode regardless of subsequent requests. */
+  permissionMode?: string;
 }
 
 export type PtySessionFactory = (input: PtySessionFactoryInput) => Promise<PtySessionLike>;

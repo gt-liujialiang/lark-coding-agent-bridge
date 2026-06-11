@@ -44,7 +44,7 @@ export class ClaudeAdapter implements AgentAdapter {
     this.homeOverride = opts.homeOverride;
     this.extraEnv = opts.env ?? {};
     this.pool = new ClaudePtyPool({
-      factory: (input) => this.spawnSession(input.cwd, input.sessionId, input.model),
+      factory: (input) => this.spawnSession(input.cwd, input.sessionId, input.model, input.permissionMode),
     });
   }
 
@@ -80,7 +80,7 @@ export class ClaudeAdapter implements AgentAdapter {
     const acquire = (): Promise<PtySession> => {
       if (!acquired) {
         acquired = this.pool
-          .acquire({ cwd, sessionId: opts.sessionId, model: opts.model })
+          .acquire({ cwd, sessionId: opts.sessionId, model: opts.model, permissionMode: opts.permissionMode })
           .then((s) => {
             session = s as PtySession;
             acquiredId = session.sessionId;
@@ -139,7 +139,7 @@ export class ClaudeAdapter implements AgentAdapter {
     };
   }
 
-  private async spawnSession(cwdRaw: string, sessionIdHint: string | undefined, model?: string): Promise<PtySessionLike> {
+  private async spawnSession(cwdRaw: string, sessionIdHint: string | undefined, model?: string, permissionMode?: string): Promise<PtySessionLike> {
     // Resolve symlinks so the JSONL path we compute matches what the claude
     // process sees from process.cwd() (e.g. /var → /private/var on macOS).
     let cwd = cwdRaw;
@@ -155,7 +155,7 @@ export class ClaudeAdapter implements AgentAdapter {
     );
 
     const args = [
-      '--permission-mode', CLAUDE_DEFAULT_PERMISSION_MODE,
+      '--permission-mode', permissionMode ?? CLAUDE_DEFAULT_PERMISSION_MODE,
       ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
       '--append-system-prompt', buildBridgeSystemPrompt(this.botIdentity),
       // model is bound at PTY-spawn time; pool hits reuse the existing PTY as-is.
