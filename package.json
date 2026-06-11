@@ -38,6 +38,7 @@
     "test:process": "vitest run tests/process --passWithNoTests",
     "ci:local": "git diff --check && pnpm test && pnpm typecheck && pnpm build",
     "ci:platform": "pnpm test && pnpm typecheck && pnpm build",
+    "postinstall": "node -e \"const{existsSync,chmodSync}=require('fs'),{join}=require('path'),h=join(require.resolve('node-pty/package.json'),'../prebuilds/darwin-arm64/spawn-helper');if(existsSync(h))chmodSync(h,0o755);\"",
     "prepare": "npm run build",
     "prepublishOnly": "pnpm typecheck && pnpm build"
   },
