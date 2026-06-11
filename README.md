@@ -185,6 +185,14 @@ This is a profile-field snippet. Do not replace the whole `config.json` with it;
 
 The bridge checks that a selected directory exists, is a directory, and is not an overly broad location such as `/`, the home root, a system directory, or a temp root. The working directory is only the current directory for an agent run. It is not a filesystem sandbox; actual file access still depends on the local agent process and its permission mode.
 
+### How Claude sessions are persisted
+
+The Claude adapter now keeps one long-lived `claude` TUI session per Lark
+conversation, driven via a PTY. Conversation logs land at
+`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (the standard
+location `claude` already uses interactively). `/new`, `/cd`, and `/reset`
+close the matching PTY; idle PTYs are reaped after 30 minutes.
+
 ## Permission modes
 
 The recommended user-facing profile config is `permissions.defaultAccess` and `permissions.maxAccess`. New profiles default to `full` for both values so the bridge can keep local tools, authorization flows, file writes, and other agent features fully usable. To tighten a profile, set one or both values to `workspace` or `read-only`; stricter modes can limit local tool execution, login/authorization flows, file writes, and similar capabilities.

@@ -183,6 +183,13 @@ lark-channel-bridge profile export <name> --include-secrets --yes
 
 bridge 会检查所选目录存在、是目录，并且不是 `/`、Home 根、系统目录或临时目录根这类范围过大的位置。工作目录只是 agent run 的当前目录，不是文件系统 sandbox；agent 实际能访问哪些文件仍取决于本机 agent 进程及其权限模式。
 
+### Claude 会话的持久化方式
+
+Claude 适配器现在为每个 Lark 会话保留一个长存的 `claude` TUI 会话，通过 PTY 驱动。
+对话日志会写入 `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`（这是
+`claude` 交互模式下使用的标准路径）。`/new`、`/cd` 和 `/reset` 会关闭对应的 PTY；
+长时间空闲的 PTY 会在 30 分钟后被回收。
+
 ## 权限模式
 
 推荐给用户配置的是 `permissions.defaultAccess` 和 `permissions.maxAccess`。新 profile 默认两项都是 `full`，以保持 bridge 的本地工具、授权流程、文件写入等能力完整可用。如需收紧权限，可以改成 `workspace` 或 `read-only`；收紧后本地工具执行、登录 / 授权流程、文件写入等能力可能受限。
