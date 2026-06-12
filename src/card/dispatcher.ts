@@ -133,6 +133,37 @@ export async function handleCardAction(deps: CardDispatchDeps): Promise<void> {
   // as a follow-up message, with full context of what it sent.
   if (BRIDGE_CALLBACK_MARKER in payload) {
     if (!verifyBridgeToken(deps, payload, scope, 'agent_callback')) return;
+    // Agent-control callback: idle_checkpoint card buttons carry
+    // `__ac: { action: 'wait' | 'terminate' }`. Route directly to the active
+    // run (resetIdleCheckpoint or stop) — neither belongs in the agent's
+    // conversation history as a synthetic user message.
+    if (payload.__ac && typeof payload.__ac === 'object') {
+      const ac = payload.__ac as Record<string, unknown>;
+      const action = typeof ac.action === 'string' ? ac.action : '';
+      const checkpointNumber = typeof ac.checkpointNumber === 'number' ? ac.checkpointNumber : undefined;
+      const active = deps.activeRuns.get(scope);
+      if (!active) {
+        log.warn('cardAction', 'agent-control-no-run', { scope, action });
+        return;
+      }
+      log.info('cardAction', 'agent-control', { scope, action, checkpointNumber });
+      if (action === 'wait') {
+        if (active.run.resetIdleCheckpoint) {
+          void active.run.resetIdleCheckpoint().catch((err) => {
+            log.fail('cardAction', err, { scope, action });
+          });
+        } else {
+          log.warn('cardAction', 'agent-control-reset-unsupported', { scope });
+        }
+      } else if (action === 'terminate') {
+        void active.run.stop().catch((err) => {
+          log.fail('cardAction', err, { scope, action });
+        });
+      } else {
+        log.warn('cardAction', 'agent-control-unknown', { scope, action });
+      }
+      return;
+    }
     // AskUserQuestion callback: payload carries `__aq` with toolUseId +
     // questionIdx [+ selectedIndex]. Route to the active run's
     // AskQuestionFlow rather than synthesising a fake user message — the

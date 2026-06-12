@@ -18,6 +18,7 @@ import { handleCardAction } from '../card/dispatcher';
 import { CallbackAuth } from '../card/callback-auth';
 import { CallbackNonceStore } from '../card/callback-store';
 import { renderCard } from '../card/run-renderer';
+import { renderIdleCheckpointCard } from '../card/idle-checkpoint-card';
 import {
   finalizeIfRunning,
   initialState,
@@ -820,6 +821,23 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const reactionPromise =
     replyMode === 'card' ? undefined : addWorkingReaction(channel, lastMsg.messageId);
 
+  // Shared across all three reply modes: when PtySession emits an
+  // idle_checkpoint, render and send a check-in card as a brand-new message.
+  // Requires callbackAuth — without it we can't sign the bridge_token the
+  // [继续等待]/[立即终止] buttons need, so we silently drop the notification.
+  const sendIdleCheckpointCard = cardRenderOptions.signCallback
+    ? async (event: Extract<AgentEvent, { type: 'idle_checkpoint' }>): Promise<void> => {
+        const bridgeToken = cardRenderOptions.signCallback!('agent_callback');
+        const card = renderIdleCheckpointCard({
+          snapshot: event.snapshot,
+          idleMs: event.idleMs,
+          checkpointNumber: event.checkpointNumber,
+          bridgeToken,
+        });
+        await channel.send(chatId, { card }, sendOpts);
+      }
+    : undefined;
+
   try {
     if (replyMode === 'card') {
       let latestState: RunState = initialState;
@@ -850,6 +868,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             sendOpts,
           );
         },
+        sendIdleCheckpointCard,
       );
       const streamDone = channel.stream(
         chatId,
@@ -895,6 +914,8 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             await markdownCtrl.setContent(renderText(filterForPrefs(state)));
           }
         },
+        undefined,
+        sendIdleCheckpointCard,
       );
       const streamDone = channel.stream(
         chatId,
@@ -931,6 +952,8 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         idleTimeoutMs,
         recordSession,
         async () => {},
+        undefined,
+        sendIdleCheckpointCard,
       );
       const body = renderText(filterForPrefs(finalState));
       if (body.trim()) {
@@ -966,6 +989,14 @@ async function processAgentStream(
    * message.
    */
   flushNewCard?: (state: RunState) => Promise<void>,
+  /**
+   * Fires when PtySession emits an `idle_checkpoint` (long turn going quiet).
+   * Caller renders + sends a check-in card. The handler also permanently
+   * disables this turn's channel-level idle watchdog — once the user has been
+   * notified, further killing is user-driven via the card's [立即终止] button,
+   * not by the channel timer.
+   */
+  onIdleCheckpoint?: (event: Extract<AgentEvent, { type: 'idle_checkpoint' }>) => Promise<void>,
 ): Promise<RunState> {
   const runStart = Date.now();
   let state: RunState = initialState;
@@ -991,8 +1022,14 @@ async function processAgentStream(
   let idleFired = false;
   let timer: NodeJS.Timeout | undefined;
   const inFlightTools = new Set<string>();
+  // Flipped on the first `idle_checkpoint` event of this turn: the user has
+  // been (or is about to be) prompted via the check-in card, so the bridge
+  // shouldn't unilaterally kill the run anymore. From here on, termination
+  // happens only via the card's [立即终止] button (→ run.stop()) or a real
+  // agent terminal event.
+  let watchdogDisabled = false;
   const armOrPauseIdle = (): void => {
-    if (!idleTimeoutMs) return;
+    if (!idleTimeoutMs || watchdogDisabled) return;
     if (timer) clearTimeout(timer);
     timer = undefined;
     if (inFlightTools.size > 0) return;
@@ -1054,6 +1091,33 @@ async function processAgentStream(
           state = { ...state, terminal: 'done' as const, footer: null };
           await flush(state);
           postAskState = initialState;
+        }
+        continue;
+      }
+      if (evt.type === 'idle_checkpoint') {
+        // Surface long-running turn status to the user. Don't terminate, don't
+        // mutate the streaming card — the check-in card goes out as its own
+        // new message. From now on the channel watchdog stays off for the
+        // remainder of this turn (see `watchdogDisabled` declaration).
+        if (!watchdogDisabled) {
+          watchdogDisabled = true;
+          if (timer) {
+            clearTimeout(timer);
+            timer = undefined;
+          }
+        }
+        log.info('agent', 'idle-checkpoint', {
+          scope,
+          checkpointNumber: evt.checkpointNumber,
+          idleMs: evt.idleMs,
+          inFlight: evt.snapshot.inFlightTools.map((t) => t.name),
+        });
+        if (onIdleCheckpoint) {
+          try {
+            await onIdleCheckpoint(evt);
+          } catch (err) {
+            log.fail('agent', err, { event: 'idle-checkpoint' });
+          }
         }
         continue;
       }

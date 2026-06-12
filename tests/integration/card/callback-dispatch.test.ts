@@ -100,6 +100,38 @@ describe('signed card callback dispatch', () => {
     expect(queued[0]?.content).toBe('[card-click] {"choice":"a"}');
   });
 
+  it('routes __ac { action: "wait" } to run.resetIdleCheckpoint() without enqueueing a message', async () => {
+    const h = await createHarness();
+    const activeRun = h.agent.run({ runId: 'run-active', prompt: 'running' }) as FakeAgentRun;
+    h.activeRuns.register('oc_group', activeRun);
+
+    await h.dispatch({
+      __bridge_cb: true,
+      bridge_token: h.token('agent_callback', { nonce: 'nonce-ac-wait' }),
+      __ac: { action: 'wait', checkpointNumber: 1 },
+    });
+
+    expect(activeRun.resetIdleCheckpointCalls).toBe(1);
+    expect(activeRun.stopped).toBe(false);
+    expect(h.pending.cancel('oc_group')).toHaveLength(0);
+  });
+
+  it('routes __ac { action: "terminate" } to run.stop() without enqueueing a message', async () => {
+    const h = await createHarness();
+    const activeRun = h.agent.run({ runId: 'run-active', prompt: 'running' }) as FakeAgentRun;
+    h.activeRuns.register('oc_group', activeRun);
+
+    await h.dispatch({
+      __bridge_cb: true,
+      bridge_token: h.token('agent_callback', { nonce: 'nonce-ac-term' }),
+      __ac: { action: 'terminate', checkpointNumber: 2 },
+    });
+
+    expect(activeRun.stopped).toBe(true);
+    expect(activeRun.resetIdleCheckpointCalls).toBe(0);
+    expect(h.pending.cancel('oc_group')).toHaveLength(0);
+  });
+
   it('rejects bridge callbacks when callback auth is unavailable', async () => {
     const h = await createHarness({ callbackAuth: false });
     const activeRun = h.agent.run({ runId: 'run-active', prompt: 'running' }) as FakeAgentRun;
