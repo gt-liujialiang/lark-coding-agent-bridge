@@ -32,37 +32,36 @@ export function renderAskQuestionCard(input: AskQuestionCardInput): object {
   const elements: object[] = [{ tag: 'markdown', content: heading }];
 
   if (isMulti) {
-    // Multi-select: form with a multi-select dropdown + Submit button.
-    // (Lark's `checker` is a single boolean checkbox, not a checkbox-group;
-    // `multi_select_static` is the right element for "pick N from a list".)
-    // The submit button's `value` carries the bridge callback; the form's
-    // selected values arrive as `form_value.aq_options` to the dispatcher.
+    // Multi-select: form with one `checker` (single checkbox) per option
+    // plus a Submit button. Lark's `checker` is a single boolean checkbox,
+    // not a checkbox-group; `multi_select_static` works for some
+    // dropdown-style forms but doesn't reliably feed selections back
+    // through `form_value` with `interactive` cards. Rendering one
+    // `checker` per option avoids both issues — on submit, each checked
+    // box arrives as `form_value.aq_opt_<idx>: "true"` (or absent).
+    const formElements: object[] = question.options.map((opt, idx) => ({
+      tag: 'checker',
+      name: `aq_opt_${idx}`,
+      text: { tag: 'plain_text', content: optionLabel(opt) },
+      checked: false,
+    }));
+    formElements.push({
+      tag: 'button',
+      name: 'aq_submit',
+      text: { tag: 'plain_text', content: '✓ 提交' },
+      type: 'primary',
+      form_action_type: 'submit',
+      behaviors: [
+        {
+          type: 'callback',
+          value: bridgePayload(input, undefined),
+        },
+      ],
+    });
     elements.push({
       tag: 'form',
       name: 'aq_form',
-      elements: [
-        {
-          tag: 'multi_select_static',
-          name: 'aq_options',
-          placeholder: { tag: 'plain_text', content: '点这里选择（可多选）' },
-          options: question.options.map((opt, idx) => ({
-            value: String(idx),
-            text: { tag: 'plain_text', content: optionLabel(opt) },
-          })),
-        },
-        {
-          tag: 'button',
-          text: { tag: 'plain_text', content: '✓ 提交' },
-          type: 'primary',
-          form_action_type: 'submit',
-          behaviors: [
-            {
-              type: 'callback',
-              value: bridgePayload(input, undefined),
-            },
-          ],
-        },
-      ],
+      elements: formElements,
     });
   } else {
     // Single-select: one button per option, each click is a direct selection.

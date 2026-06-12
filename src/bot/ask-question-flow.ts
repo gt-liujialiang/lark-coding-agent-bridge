@@ -159,20 +159,19 @@ export class AskQuestionFlow {
  * Map a click payload to the 0-based selected option indices for the
  * current question.
  * - Single-select: `selectedIndex` in the bridge payload.
- * - Multi-select: form's `aq_options` field carries a string or array of
- *   stringified indices.
+ * - Multi-select: each option is its own `checker` named `aq_opt_<idx>`.
+ *   `form_value` carries one entry per checked box; absent / falsy means
+ *   unchecked.
  */
 function parseSelections(
   input: AskQuestionAnswerInput,
   question: AskUserQuestionItem,
 ): number[] {
   if (question.multiSelect) {
-    const raw = input.formValue?.aq_options;
-    const arr = normalizeFormValueList(raw);
     const indices: number[] = [];
-    for (const s of arr) {
-      const n = Number.parseInt(s, 10);
-      if (Number.isFinite(n) && n >= 0 && n < question.options.length) indices.push(n);
+    const form = input.formValue ?? {};
+    for (let i = 0; i < question.options.length; i++) {
+      if (isTruthyFormValue(form[`aq_opt_${i}`])) indices.push(i);
     }
     return indices;
   }
@@ -184,22 +183,8 @@ function parseSelections(
   return [];
 }
 
-function normalizeFormValueList(raw: unknown): string[] {
-  if (raw == null) return [];
-  if (Array.isArray(raw)) return raw.map(String);
-  if (typeof raw === 'string') {
-    // Lark may send comma-separated, JSON-array, or plain string. Be lenient.
-    const trimmed = raw.trim();
-    if (trimmed.startsWith('[')) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (Array.isArray(parsed)) return parsed.map(String);
-      } catch {
-        /* fallthrough */
-      }
-    }
-    if (trimmed.includes(',')) return trimmed.split(',').map((s) => s.trim()).filter(Boolean);
-    return trimmed ? [trimmed] : [];
-  }
-  return [];
+function isTruthyFormValue(v: unknown): boolean {
+  // Lark's `checker` reports checked state as the boolean true or the
+  // string "true". Be defensive about both representations.
+  return v === true || (typeof v === 'string' && v.toLowerCase() === 'true');
 }

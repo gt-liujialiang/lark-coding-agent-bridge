@@ -37,7 +37,7 @@ describe('renderAskQuestionCard', () => {
     expect(((buttons[1]?.behaviors?.[0]?.value) as { __aq: { selectedIndex: number } }).__aq.selectedIndex).toBe(1);
   });
 
-  it('renders a multi-select question as a form with multi_select_static + submit', () => {
+  it('renders a multi-select question as a form with one checker per option + submit', () => {
     const card = renderAskQuestionCard({
       toolUseId: 'toolu_y',
       questionIdx: 1,
@@ -48,22 +48,25 @@ describe('renderAskQuestionCard', () => {
         multiSelect: true,
         options: [{ label: 'Apple' }, { label: 'Banana' }, { label: 'Cherry' }],
       },
-    }) as { body: { elements: ({ tag: 'markdown'; content: string } | { tag: 'form'; name: string; elements: object[] })[] } };
+    }) as { body: { elements: ({ tag: 'markdown'; content: string } | { tag: 'form'; name: string; elements: { tag: string; name?: string; behaviors?: { value: Record<string, unknown> }[]; text?: { content: string } }[] })[] } };
 
     const els = card.body.elements;
     expect((els[0] as { content: string }).content).toMatch(/Pick fruits/);
     expect((els[0] as { content: string }).content).toMatch(/\(2\/2\)/);
-    const form = els.find((e) => e.tag === 'form') as { elements: ({ tag: 'multi_select_static'; name: string; options: { value: string; text: { content: string } }[] } | { tag: 'button'; behaviors: { value: Record<string, unknown> }[] })[] };
-    expect(form).toBeTruthy();
-    const ms = form.elements.find((e) => e.tag === 'multi_select_static') as { name: string; options: { value: string; text: { content: string } }[] };
-    expect(ms.name).toBe('aq_options');
-    expect(ms.options.map((o) => o.value)).toEqual(['0', '1', '2']);
-    expect(ms.options.map((o) => o.text.content)).toEqual(['Apple', 'Banana', 'Cherry']);
-    const submit = form.elements.find((e) => e.tag === 'button') as unknown as { behaviors: { value: { __aq: { questionIdx: number; toolUseId: string; selectedIndex?: number } } }[] };
-    expect(submit.behaviors[0]?.value.__aq.toolUseId).toBe('toolu_y');
-    expect(submit.behaviors[0]?.value.__aq.questionIdx).toBe(1);
-    // No `selectedIndex` on the submit button — selections come from form_value.
-    expect(submit.behaviors[0]?.value.__aq.selectedIndex).toBeUndefined();
+    const form = els.find((e) => e.tag === 'form') as { name: string; elements: { tag: string; name?: string; behaviors?: { value: Record<string, unknown> }[]; text?: { content: string } }[] };
+    expect(form.name).toBe('aq_form');
+    // One checker per option, in order
+    const checkers = form.elements.filter((e) => e.tag === 'checker');
+    expect(checkers).toHaveLength(3);
+    expect(checkers[0]?.name).toBe('aq_opt_0');
+    expect(checkers[0]?.text?.content).toBe('Apple');
+    expect(checkers[2]?.name).toBe('aq_opt_2');
+    const submit = form.elements.find((e) => e.tag === 'button')!;
+    expect(submit.name).toBe('aq_submit');
+    const v = submit.behaviors?.[0]?.value as { __aq: { questionIdx: number; toolUseId: string; selectedIndex?: number } };
+    expect(v.__aq.toolUseId).toBe('toolu_y');
+    expect(v.__aq.questionIdx).toBe(1);
+    expect(v.__aq.selectedIndex).toBeUndefined();
   });
 
   it('omits the (n/m) progress indicator when there is only one question', () => {

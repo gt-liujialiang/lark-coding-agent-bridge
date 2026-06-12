@@ -83,13 +83,13 @@ describe('AskQuestionFlow', () => {
     expect(channelSend).toHaveBeenCalledTimes(2); // no new card after final
   });
 
-  it('multi-select extracts indices from form_value.aq_options', async () => {
+  it('multi-select collects checked aq_opt_* fields from form_value', async () => {
     const { flow, answerQuestion } = makeFlow();
     await flow.start('tu3', [Q_MULTI]);
     await flow.onAnswer({
       toolUseId: 'tu3',
       questionIdx: 0,
-      formValue: { aq_options: ['0', '2'] },
+      formValue: { aq_opt_0: true, aq_opt_1: false, aq_opt_2: true },
     });
     expect(answerQuestion).toHaveBeenCalledWith({
       toolUseId: 'tu3',
@@ -99,13 +99,13 @@ describe('AskQuestionFlow', () => {
     });
   });
 
-  it('multi-select tolerates comma-separated string form values', async () => {
+  it('multi-select tolerates "true"/"false" string form values', async () => {
     const { flow, answerQuestion } = makeFlow();
     await flow.start('tu4', [Q_MULTI]);
     await flow.onAnswer({
       toolUseId: 'tu4',
       questionIdx: 0,
-      formValue: { aq_options: '1,2' },
+      formValue: { aq_opt_0: 'false', aq_opt_1: 'true', aq_opt_2: 'true' },
     });
     expect(answerQuestion).toHaveBeenCalledWith({
       toolUseId: 'tu4',
