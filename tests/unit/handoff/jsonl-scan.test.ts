@@ -63,7 +63,7 @@ describe('jsonl-scan', () => {
 
   it('readPreview extracts first user message and line count, truncating to 60 chars', () => {
     const path = join(dir, 'abc-9999.jsonl');
-    const longMsg = '把 user_id 字段加到 audit log 里面，方便后续审计追踪每个请求的来源';
+    const longMsg = '把 user_id 字段加到 audit log 里面，方便后续审计追踪每个请求的来源，同时记录请求时间戳和 trace id 便于日后回溯调试';
     const lines = [
       JSON.stringify({ type: 'summary', text: 'preamble' }),
       JSON.stringify({ type: 'user', message: { role: 'user', content: longMsg } }),
@@ -74,8 +74,21 @@ describe('jsonl-scan', () => {
     writeFileSync(path, lines.join('\n') + '\n');
     const preview = readPreview(path);
     expect(preview.lineCount).toBe(5);
-    expect(preview.firstUserMessage.length).toBeLessThanOrEqual(60);
+    expect(preview.firstUserMessage.length).toBe(60);
+    expect(preview.firstUserMessage.endsWith('…')).toBe(true);
     expect(preview.firstUserMessage.startsWith('把 user_id 字段')).toBe(true);
+  });
+
+  it('readPreview returns short message verbatim without ellipsis', () => {
+    const path = join(dir, 'ghi-1111.jsonl');
+    const lines = [
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'short msg' } }),
+    ];
+    writeFileSync(path, lines.join('\n') + '\n');
+    const preview = readPreview(path);
+    expect(preview.firstUserMessage).toBe('short msg');
+    expect(preview.firstUserMessage.endsWith('…')).toBe(false);
+    expect(preview.lineCount).toBe(1);
   });
 
   it('readPreview returns empty preview when no user message exists', () => {
