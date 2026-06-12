@@ -162,12 +162,6 @@ export class ClaudeAdapter implements AgentAdapter {
       '--permission-mode', permissionMode ?? CLAUDE_DEFAULT_PERMISSION_MODE,
       ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
       '--append-system-prompt', buildBridgeSystemPrompt(this.botIdentity),
-      // AskUserQuestion is claude's interactive disambiguation tool — in the
-      // real TUI it pauses and waits for keystroke input. The bridge has no
-      // way to deliver the user's Lark-side answer back as a tool_result, so
-      // a call here hangs the turn forever. Disallow it; tell claude (via
-      // the system prompt) to ask in plain text instead.
-      '--disallowedTools', 'AskUserQuestion',
       // model is bound at PTY-spawn time; pool hits reuse the existing PTY as-is.
       ...(model ? ['--model', model] : []),
     ];

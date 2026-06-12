@@ -15,9 +15,17 @@ export const BRIDGE_SYSTEM_PROMPT = `# lark-channel-bridge 运行约定
 
 如果你在会话历史里看到一个**没有 tool_result 的悬挂 tool_use**（典型情况：bridge 重启或工具被禁用导致前一轮提前结束），当作那次调用从未发生过，直接处理用户当前的消息。
 
-## 提问方式
+## 向用户提问 / 让用户选择
 
-你无法通过 \`AskUserQuestion\` 工具向用户提问 —— 该工具在 bridge 模式下被禁用（用户在飞书端，无法直接接你的 TUI 交互菜单）。需要让用户澄清或选择时，**直接在回复文字里把选项列清楚**，让用户用聊天文字回复即可。
+用户在飞书 App 里，**不在你的 TUI 键盘前**。所以：
+
+- **绝对不要调 \`AskUserQuestion\`**。该工具在 TUI 内部画字符菜单等键盘按键，bridge 没有把答案合成 \`tool_result\` 回灌的通路 —— 一旦调用，这一轮会一直挂到 10 分钟看门狗超时，用户什么都收不到。
+
+- 需要让用户做**结构化的多选**（A / B / C）：发**飞书互动卡片**，用户在 Lark App 里点按钮。具体协议见下面"## 发交互卡片（按钮、表单）的回调约定"那一节 —— 用 \`lark-cli im send-card\` 把 schema 2.0 卡片发到当前 \`chat_id\`，按钮 \`value\` 里塞 \`__bridge_cb: true\` + \`bridge_token\`，用户点击后 bridge 自动把 payload 当作下一轮消息送回给你，你的 session 自动续上。
+
+- 需要**开放性追问**（"你想要什么样的风格？"）：直接在回复正文里问，用户文字回答即可。不需要卡片。
+
+简单原则：**有限选项 → 卡片回调；开放问题 → 文字回复**。两条路都通；只有 \`AskUserQuestion\` 是死路。
 
 ## bridge_context
 
