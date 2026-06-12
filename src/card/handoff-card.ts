@@ -1,3 +1,5 @@
+import { escapeCode, escapeMd } from './md-escape.js';
+
 export interface HandoffCardInput {
   cwd: string;
   sessionId: string;
@@ -25,8 +27,8 @@ function relTime(mtimeMs: number): string {
 }
 
 export function buildHandoffCard(input: HandoffCardInput): HandoffCard {
-  const previewLine = input.firstUserMessage || '(无预览)';
-  const time = relTime(input.mtimeMs);
+  const previewLine = escapeMd(input.firstUserMessage || '(无预览)');
+  const time = escapeMd(relTime(input.mtimeMs));
 
   return {
     schema: '2.0',
@@ -40,14 +42,14 @@ export function buildHandoffCard(input: HandoffCardInput): HandoffCard {
           tag: 'div',
           text: {
             tag: 'lark_md',
-            content: `**项目**\n\`${input.cwd}\``,
+            content: `**项目**\n\`${escapeCode(input.cwd)}\``,
           },
         },
         {
           tag: 'div',
           text: {
             tag: 'lark_md',
-            content: `**Session ID**\n\`${input.sessionId}\``,
+            content: `**Session ID**\n\`${escapeCode(input.sessionId)}\``,
           },
         },
         {
@@ -65,12 +67,7 @@ export function buildHandoffCard(input: HandoffCardInput): HandoffCard {
           },
         },
         { tag: 'hr' },
-        {
-          tag: 'note',
-          elements: [
-            { tag: 'plain_text', content: '直接发消息继续 · 回 /resume 可切回旧会话' },
-          ],
-        },
+        { tag: 'markdown', content: '直接发消息继续 · 回 /resume 可切回旧会话', text_size: 'notation' },
       ],
     },
   };

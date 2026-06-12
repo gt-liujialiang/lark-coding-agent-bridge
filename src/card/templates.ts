@@ -1,3 +1,5 @@
+import { escapeCode, escapeMd } from './md-escape.js';
+
 interface ButtonSpec {
   text: string;
   value: Record<string, unknown>;
@@ -209,10 +211,3 @@ export function helpCard(agentName = 'Agent'): object {
   ]);
 }
 
-function escapeMd(s: string): string {
-  return s.replace(/([*_`\\])/g, '\\$1');
-}
-
-function escapeCode(s: string): string {
-  return s.replace(/`/g, "'");
-}
