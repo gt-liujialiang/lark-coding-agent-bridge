@@ -178,6 +178,13 @@ export interface AgentRun {
     isLastQuestion: boolean;
     multiSelect: boolean;
   }): Promise<void>;
+  /**
+   * Tell the underlying session (if any) that the user has acknowledged a
+   * pending `idle_checkpoint` and wants to keep waiting. Restarts the
+   * checkpoint backoff from the first threshold. Optional — adapters that
+   * don't emit `idle_checkpoint` events may omit it.
+   */
+  resetIdleCheckpoint?(): Promise<void>;
 }
 
 /**

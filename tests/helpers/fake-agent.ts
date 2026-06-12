@@ -10,6 +10,7 @@ export interface FakeAgentRun extends AgentRun {
   readonly opts: AgentRunOptions;
   readonly stopped: boolean;
   readonly waitForExitCalls: number;
+  readonly resetIdleCheckpointCalls: number;
 }
 
 class FakeRun implements FakeAgentRun {
@@ -19,6 +20,7 @@ class FakeRun implements FakeAgentRun {
   readonly waitForExitResult: boolean;
   #stopped = false;
   #waitForExitCalls = 0;
+  #resetIdleCheckpointCalls = 0;
 
   constructor(
     opts: AgentRunOptions,
@@ -46,6 +48,14 @@ class FakeRun implements FakeAgentRun {
   async waitForExit(): Promise<boolean> {
     this.#waitForExitCalls++;
     return this.waitForExitResult;
+  }
+
+  get resetIdleCheckpointCalls(): number {
+    return this.#resetIdleCheckpointCalls;
+  }
+
+  async resetIdleCheckpoint(): Promise<void> {
+    this.#resetIdleCheckpointCalls++;
   }
 
   private async *iterate(events: readonly AgentEvent[]): AsyncIterable<AgentEvent> {

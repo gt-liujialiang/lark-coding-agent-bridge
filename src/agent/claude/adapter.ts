@@ -146,6 +146,13 @@ export class ClaudeAdapter implements AgentAdapter {
         }
         await session.answerAskUserQuestion(answer);
       },
+      async resetIdleCheckpoint() {
+        // Only meaningful if the session already exists. The acquire path
+        // would spawn a new PTY just to reset state on it, which is wrong:
+        // if no session is bound, there's no turn to keep waiting for.
+        if (!session) return;
+        session.resetIdleCheckpoint();
+      },
     };
   }
 
