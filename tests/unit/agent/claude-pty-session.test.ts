@@ -212,7 +212,7 @@ describe('PtySession', () => {
       expect(stub.writes).toEqual(['3']);
     });
 
-    it('single-select last question: writes number + \\r to commit', async () => {
+    it('single-select last question: writes number then \\r as separate keystrokes', async () => {
       const stub = createStubPty();
       const session = makeSession(stub);
       await session.answerAskUserQuestion({
@@ -221,10 +221,10 @@ describe('PtySession', () => {
         multiSelect: false,
         isLastQuestion: true,
       });
-      expect(stub.writes).toEqual(['1\r']);
+      expect(stub.writes).toEqual(['1', '\r']);
     });
 
-    it('multi-select: writes each number then Tab, no \\r when not last', async () => {
+    it('multi-select: each number then Tab as separate writes, no \\r when not last', async () => {
       const stub = createStubPty();
       const session = makeSession(stub);
       await session.answerAskUserQuestion({
@@ -233,10 +233,10 @@ describe('PtySession', () => {
         multiSelect: true,
         isLastQuestion: false,
       });
-      expect(stub.writes).toEqual(['13\t']);
+      expect(stub.writes).toEqual(['1', '3', '\t']);
     });
 
-    it('multi-select last question: numbers + Tab + Enter', async () => {
+    it('multi-select last question: numbers + Tab + Enter as four separate writes', async () => {
       const stub = createStubPty();
       const session = makeSession(stub);
       await session.answerAskUserQuestion({
@@ -245,7 +245,7 @@ describe('PtySession', () => {
         multiSelect: true,
         isLastQuestion: true,
       });
-      expect(stub.writes).toEqual(['24\t\r']);
+      expect(stub.writes).toEqual(['2', '4', '\t', '\r']);
     });
 
     it('does nothing when selections is empty', async () => {
@@ -269,7 +269,7 @@ describe('PtySession', () => {
         multiSelect: true,
         isLastQuestion: false,
       });
-      expect(stub.writes).toEqual(['13\t']);
+      expect(stub.writes).toEqual(['1', '3', '\t']);
     });
   });
 

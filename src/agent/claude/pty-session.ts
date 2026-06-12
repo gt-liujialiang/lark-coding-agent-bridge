@@ -232,26 +232,28 @@ export class PtySession {
       }
       keys.push(String(oneBased));
     }
-    let payload = keys.join('');
-    if (input.multiSelect) {
-      // After toggling, Tab moves focus to the Submit pill in the tab bar.
-      payload += '\t';
-    }
-    if (input.isLastQuestion) {
-      // Final Enter commits the whole batch. For a single-select that
-      // auto-advances, this is also what triggers submit on the last
-      // question.
-      payload += '\r';
-    }
+    if (input.multiSelect) keys.push('\t');
+    if (input.isLastQuestion) keys.push('\r');
+
     log.info('agent', 'claude-aq-answer', {
       sessionId: this.opts.sessionId,
       toolUseId: input.toolUseId,
       selections: input.selections,
       multiSelect: input.multiSelect,
       isLastQuestion: input.isLastQuestion,
-      payloadHex: Buffer.from(payload).toString('hex'),
+      payloadHex: Buffer.from(keys.join('')).toString('hex'),
     });
-    this.opts.pty.write(payload);
+    // Send each keystroke as its own PTY write with a small gap. claude TUI
+    // runs in bracketed-paste mode: a burst of bytes arriving in one read is
+    // treated as a *paste* rather than discrete keypresses, which means Tab
+    // and Enter get absorbed as characters in the paste buffer instead of
+    // navigating + submitting. Writing one byte per write with ~80ms gaps
+    // makes the TUI see distinct keystrokes. (Same root cause as the
+    // bracketed-paste workaround for sending prompts.)
+    for (let i = 0; i < keys.length; i++) {
+      this.opts.pty.write(keys[i]!);
+      if (i < keys.length - 1) await delay(80);
+    }
   }
 
   /**
