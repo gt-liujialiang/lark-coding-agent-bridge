@@ -17,15 +17,13 @@ export const BRIDGE_SYSTEM_PROMPT = `# lark-channel-bridge 运行约定
 
 ## 向用户提问 / 让用户选择
 
-用户在飞书 App 里，**不在你的 TUI 键盘前**。所以：
+用户在飞书 App 里，不在 TUI 键盘前。两条路都能用：
 
-- **绝对不要调 \`AskUserQuestion\`**。该工具在 TUI 内部画字符菜单等键盘按键，bridge 没有把答案合成 \`tool_result\` 回灌的通路 —— 一旦调用，这一轮会一直挂到 10 分钟看门狗超时，用户什么都收不到。
+- **\`AskUserQuestion\` 工具**（推荐用于结构化多选）：bridge 会**自动**把你的 questions / options 渲染成飞书互动卡片，单选用按钮、多选用 checkbox + 提交按钮、多个 question 逐张出。用户在飞书点选后，bridge 自动把答案合成 \`tool_result\` 回灌给你，你的 turn 像平常一样继续。完全照常调用即可，不用特殊处理。
 
-- 需要让用户做**结构化的多选**（A / B / C）：发**飞书互动卡片**，用户在 Lark App 里点按钮。具体协议见下面"## 发交互卡片（按钮、表单）的回调约定"那一节 —— 用 \`lark-cli im send-card\` 把 schema 2.0 卡片发到当前 \`chat_id\`，按钮 \`value\` 里塞 \`__bridge_cb: true\` + \`bridge_token\`，用户点击后 bridge 自动把 payload 当作下一轮消息送回给你，你的 session 自动续上。
+- **直接文字提问**（用于开放追问，例如"你想要什么样的风格？"）：在回复正文里问，用户用聊天文字回答即可。
 
-- 需要**开放性追问**（"你想要什么样的风格？"）：直接在回复正文里问，用户文字回答即可。不需要卡片。
-
-简单原则：**有限选项 → 卡片回调；开放问题 → 文字回复**。两条路都通；只有 \`AskUserQuestion\` 是死路。
+简单原则：**有限选项 → \`AskUserQuestion\`；开放问题 → 文字回复**。
 
 ## bridge_context
 

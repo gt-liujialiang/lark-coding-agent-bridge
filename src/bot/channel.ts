@@ -13,6 +13,7 @@ import {
   type BridgePromptQuotedMessage,
 } from '../agent/prompt';
 import type { AgentAdapter, AgentEvent } from '../agent/types';
+import { AskQuestionFlow } from './ask-question-flow';
 import { handleCardAction } from '../card/dispatcher';
 import { CallbackAuth } from '../card/callback-auth';
 import { CallbackNonceStore } from '../card/callback-store';
@@ -790,6 +791,28 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       }
     : {};
 
+  // Bind an AskQuestionFlow to this run so the card dispatcher can route
+  // AskUserQuestion button clicks back here. Only when callbackAuth is
+  // available — without it, we can't sign the bridge_token the buttons need.
+  if (callbackAuth && handle.run.answerQuestion) {
+    handle.askQuestion = new AskQuestionFlow({
+      run: handle.run,
+      channel,
+      chatId,
+      sendOpts,
+      signBridgeToken: (action: string) =>
+        callbackAuth.sign({
+          runId: execution.runId,
+          scope,
+          chatId,
+          operatorOpenId: firstMsg.senderId,
+          action,
+          policyFingerprint: flow.policy.policyFingerprint,
+          ttlMs: 24 * 60 * 60 * 1000,
+        }),
+    });
+  }
+
   // For non-card modes Claude's output doesn't surface visually until either
   // a first streamed token (markdown mode) or the whole run ends (text mode).
   // Add a "Typing" reaction to the triggering message as an instant ack, but
@@ -981,6 +1004,22 @@ async function processAgentStream(
 
       if (evt.type === 'system') {
         recordSession(evt);
+        continue;
+      }
+      if (evt.type === 'ask_user_question') {
+        // Special: don't fold into RunState (the streaming card stays in
+        // "thinking" mode). Send a separate interactive card via the run's
+        // bound AskQuestionFlow; the user click routes back through the
+        // card dispatcher.
+        if (handle.askQuestion) {
+          try {
+            await handle.askQuestion.start(evt.id, evt.questions);
+          } catch (err) {
+            log.fail('agent', err, { event: 'ask-question-start' });
+          }
+        } else {
+          log.warn('agent', 'ask-question-no-flow-bound', { toolUseId: evt.id });
+        }
         continue;
       }
       if (evt.type === 'usage') {

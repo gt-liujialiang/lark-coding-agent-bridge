@@ -140,6 +140,12 @@ export class ClaudeAdapter implements AgentAdapter {
         // complete; the PTY itself is meant to stay alive.
         return true;
       },
+      async answerQuestion(answer) {
+        if (!session) {
+          try { session = await acquire(); } catch { return; }
+        }
+        await session.answerAskUserQuestion(answer);
+      },
     };
   }
 

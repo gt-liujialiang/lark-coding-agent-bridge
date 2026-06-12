@@ -133,6 +133,35 @@ export async function handleCardAction(deps: CardDispatchDeps): Promise<void> {
   // as a follow-up message, with full context of what it sent.
   if (BRIDGE_CALLBACK_MARKER in payload) {
     if (!verifyBridgeToken(deps, payload, scope, 'agent_callback')) return;
+    // AskUserQuestion callback: payload carries `__aq` with toolUseId +
+    // questionIdx [+ selectedIndex]. Route to the active run's
+    // AskQuestionFlow rather than synthesising a fake user message — the
+    // user's choice belongs to the *current* turn, not a new one.
+    if (payload.__aq && typeof payload.__aq === 'object') {
+      const aq = payload.__aq as Record<string, unknown>;
+      const toolUseId = typeof aq.toolUseId === 'string' ? aq.toolUseId : '';
+      const questionIdx = typeof aq.questionIdx === 'number' ? aq.questionIdx : -1;
+      const selectedIndex = typeof aq.selectedIndex === 'number' ? aq.selectedIndex : undefined;
+      const active = deps.activeRuns.get(scope);
+      if (!toolUseId || questionIdx < 0 || !active?.askQuestion) {
+        log.warn('cardAction', 'ask-question-no-handler', { scope, toolUseId, questionIdx });
+        return;
+      }
+      log.info('cardAction', 'ask-question-answer', {
+        scope, toolUseId, questionIdx,
+        ...(selectedIndex !== undefined ? { selectedIndex } : {}),
+        ...(formValue ? { hasFormValue: true } : {}),
+      });
+      void active.askQuestion.onAnswer({
+        toolUseId,
+        questionIdx,
+        ...(selectedIndex !== undefined ? { selectedIndex } : {}),
+        ...(formValue ? { formValue } : {}),
+      }).catch((err) => {
+        log.fail('cardAction', err, { scope, toolUseId });
+      });
+      return;
+    }
     forwardToAgent(deps, payload, formValue, scope, threadId, mode);
     return;
   }
