@@ -176,6 +176,85 @@ export class PtySession {
   }
 
   /**
+   * Deliver an answer to a pending `AskUserQuestion` menu by writing the
+   * corresponding keystrokes to the PTY. claude's TUI internally synthesises
+   * the `tool_result`; our JSONL poll loop will see it next tick and resume
+   * normal event emission.
+   *
+   * Keystroke protocol (probed against claude 2.1.150):
+   * - single-select: type the option's 1-based index ("3"). claude auto-
+   *   advances to the next question.
+   * - multi-select: type each chosen option's 1-based index, then `Tab` to
+   *   move focus to the Submit pill. claude auto-advances on Submit.
+   * - submit / finalize the whole batch: a final `Enter` once all questions
+   *   are answered (`isLastQuestion: true`).
+   *
+   * Selections are 0-based option indices in the original input order.
+   */
+  async answerAskUserQuestion(input: {
+    toolUseId: string;
+    selections: number[];
+    multiSelect: boolean;
+    isLastQuestion: boolean;
+  }): Promise<void> {
+    if (!this.alive) {
+      log.warn('agent', 'claude-aq-answer-dead', {
+        sessionId: this.opts.sessionId,
+        toolUseId: input.toolUseId,
+      });
+      return;
+    }
+    if (input.selections.length === 0) {
+      // Defensive: nothing to toggle. Don't write anything; the caller is
+      // probably mishandling an empty selection. We could Esc-cancel, but
+      // that would abort the whole AskUserQuestion — leave the decision to
+      // the caller. Just log.
+      log.warn('agent', 'claude-aq-empty-selections', {
+        sessionId: this.opts.sessionId,
+        toolUseId: input.toolUseId,
+      });
+      return;
+    }
+    // 0-based selections → 1-based menu indices. Multi-digit numbers
+    // (>9 options) aren't supported by the TUI as direct numeric input, so
+    // we cap at 9; callers above this size should fall back to navigation
+    // keys, which we don't implement yet.
+    const keys: string[] = [];
+    for (const idx of input.selections) {
+      const oneBased = idx + 1;
+      if (oneBased < 1 || oneBased > 9) {
+        log.warn('agent', 'claude-aq-index-out-of-range', {
+          sessionId: this.opts.sessionId,
+          toolUseId: input.toolUseId,
+          idx,
+        });
+        continue;
+      }
+      keys.push(String(oneBased));
+    }
+    let payload = keys.join('');
+    if (input.multiSelect) {
+      // After toggling, Tab moves focus to the Submit pill in the tab bar.
+      payload += '\t';
+    }
+    if (input.isLastQuestion) {
+      // Final Enter commits the whole batch. For a single-select that
+      // auto-advances, this is also what triggers submit on the last
+      // question.
+      payload += '\r';
+    }
+    log.info('agent', 'claude-aq-answer', {
+      sessionId: this.opts.sessionId,
+      toolUseId: input.toolUseId,
+      selections: input.selections,
+      multiSelect: input.multiSelect,
+      isLastQuestion: input.isLastQuestion,
+      payloadHex: Buffer.from(payload).toString('hex'),
+    });
+    this.opts.pty.write(payload);
+  }
+
+  /**
    * Initialize the reader's cursor to the current JSONL line count. Used by
    * the pool when reusing an existing PTY for a new turn so the next turn
    * starts past whatever already lives in the log.

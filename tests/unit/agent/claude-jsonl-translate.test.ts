@@ -122,6 +122,73 @@ describe('JsonlTurnTranslator', () => {
     ])).toEqual([]);
   });
 
+  it('translates AskUserQuestion tool_use into a structured ask_user_question event', () => {
+    expect(run([
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_aq',
+              name: 'AskUserQuestion',
+              input: {
+                questions: [
+                  {
+                    question: 'Pick a color',
+                    header: 'Color',
+                    multiSelect: false,
+                    options: [
+                      { label: 'Red', description: 'bold' },
+                      { label: 'Blue' },
+                    ],
+                  },
+                  {
+                    question: 'Pick fruits',
+                    multiSelect: true,
+                    options: [
+                      { label: 'Apple' },
+                      { label: 'Banana' },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    ])).toEqual([
+      {
+        type: 'ask_user_question',
+        id: 'toolu_aq',
+        questionIdx: 0,
+        questions: [
+          {
+            question: 'Pick a color',
+            header: 'Color',
+            options: [
+              { label: 'Red', description: 'bold' },
+              { label: 'Blue' },
+            ],
+          },
+          {
+            question: 'Pick fruits',
+            multiSelect: true,
+            options: [{ label: 'Apple' }, { label: 'Banana' }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('does not emit ask_user_question when input is malformed', () => {
+    expect(run([
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'AskUserQuestion', input: {} }] } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'AskUserQuestion', input: { questions: 'bad' } }] } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't3', name: 'AskUserQuestion', input: { questions: [{ options: [] }] } }] } },
+    ])).toEqual([]);
+  });
+
   it('reports whether end_turn was seen', () => {
     const t = new JsonlTurnTranslator();
     for (const _ of t.translate({ type: 'assistant', message: { content: [{ type: 'text', text: 'x' }] } })) {

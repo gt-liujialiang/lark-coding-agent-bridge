@@ -185,6 +185,94 @@ describe('PtySession', () => {
     expect(stub.writes.filter((w) => w === '2\r').length).toBe(before);
   });
 
+  describe('answerAskUserQuestion', () => {
+    const cwd = '/Users/me/proj';
+
+    function makeSession(stub: ReturnType<typeof createStubPty>) {
+      return new PtySession({
+        pty: stub.handle,
+        cwd,
+        sessionId: 'aq-test',
+        home: '/tmp',
+        pollMs: 10,
+        promptDelayMs: 5,
+        readinessQuietMs: 0,
+      });
+    }
+
+    it('single-select: writes just the option number (no Tab) for a non-last question', async () => {
+      const stub = createStubPty();
+      const session = makeSession(stub);
+      await session.answerAskUserQuestion({
+        toolUseId: 'toolu_1',
+        selections: [2],
+        multiSelect: false,
+        isLastQuestion: false,
+      });
+      expect(stub.writes).toEqual(['3']);
+    });
+
+    it('single-select last question: writes number + \\r to commit', async () => {
+      const stub = createStubPty();
+      const session = makeSession(stub);
+      await session.answerAskUserQuestion({
+        toolUseId: 'toolu_2',
+        selections: [0],
+        multiSelect: false,
+        isLastQuestion: true,
+      });
+      expect(stub.writes).toEqual(['1\r']);
+    });
+
+    it('multi-select: writes each number then Tab, no \\r when not last', async () => {
+      const stub = createStubPty();
+      const session = makeSession(stub);
+      await session.answerAskUserQuestion({
+        toolUseId: 'toolu_3',
+        selections: [0, 2],
+        multiSelect: true,
+        isLastQuestion: false,
+      });
+      expect(stub.writes).toEqual(['13\t']);
+    });
+
+    it('multi-select last question: numbers + Tab + Enter', async () => {
+      const stub = createStubPty();
+      const session = makeSession(stub);
+      await session.answerAskUserQuestion({
+        toolUseId: 'toolu_4',
+        selections: [1, 3],
+        multiSelect: true,
+        isLastQuestion: true,
+      });
+      expect(stub.writes).toEqual(['24\t\r']);
+    });
+
+    it('does nothing when selections is empty', async () => {
+      const stub = createStubPty();
+      const session = makeSession(stub);
+      await session.answerAskUserQuestion({
+        toolUseId: 'toolu_empty',
+        selections: [],
+        multiSelect: false,
+        isLastQuestion: false,
+      });
+      expect(stub.writes).toEqual([]);
+    });
+
+    it('skips out-of-range option indices but still writes the in-range ones', async () => {
+      const stub = createStubPty();
+      const session = makeSession(stub);
+      await session.answerAskUserQuestion({
+        toolUseId: 'toolu_oor',
+        selections: [0, 9, 2], // 9 maps to "10" which exceeds single-digit
+        multiSelect: true,
+        isLastQuestion: false,
+      });
+      expect(stub.writes).toEqual(['13\t']);
+    });
+  });
+
   it('softInterrupt writes ESC and resolves done(interrupted) if the turn does not complete in grace', async () => {
     const cwd = '/Users/me/proj';
     const sessionId = 'sess-3';

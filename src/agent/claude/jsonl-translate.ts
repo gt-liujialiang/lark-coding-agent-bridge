@@ -1,4 +1,4 @@
-import type { AgentEvent } from '../types';
+import type { AgentEvent, AskUserQuestionItem } from '../types';
 
 interface ContentBlock {
   type?: string;
@@ -88,6 +88,24 @@ export class JsonlTurnTranslator {
         } else if (block.type === 'thinking' && typeof block.thinking === 'string' && block.thinking) {
           yield { type: 'thinking', delta: block.thinking };
         } else if (block.type === 'tool_use' && block.id && block.name) {
+          if (block.name === 'AskUserQuestion') {
+            // Special-case claude's built-in AskUserQuestion. Don't emit it
+            // as a generic tool_use (the bot can't show a useful panel for a
+            // tool that's pending blocking keyboard input); emit a structured
+            // event the bot can render as an interactive Lark card.
+            const questions = parseAskUserQuestions(block.input);
+            if (questions.length > 0) {
+              yield {
+                type: 'ask_user_question',
+                id: block.id,
+                questions,
+                questionIdx: 0,
+              };
+            }
+            // If the input couldn't be parsed (shouldn't happen with real
+            // claude), skip silently — better than emitting half a tool_use.
+            continue;
+          }
           yield { type: 'tool_use', id: block.id, name: block.name, input: block.input };
         }
       }
@@ -122,4 +140,47 @@ export class JsonlTurnTranslator {
       }
     }
   }
+}
+
+/**
+ * Parse the `input` of an `AskUserQuestion` tool_use into our typed shape.
+ * Returns [] if the structure doesn't match.
+ */
+function parseAskUserQuestions(input: unknown): AskUserQuestionItem[] {
+  if (!input || typeof input !== 'object') return [];
+  const raw = (input as { questions?: unknown }).questions;
+  if (!Array.isArray(raw)) return [];
+  const out: AskUserQuestionItem[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const q = item as {
+      question?: unknown;
+      header?: unknown;
+      multiSelect?: unknown;
+      options?: unknown;
+    };
+    const question = typeof q.question === 'string' ? q.question : '';
+    if (!question) continue;
+    const rawOptions = Array.isArray(q.options) ? q.options : [];
+    const options: AskUserQuestionItem['options'] = [];
+    for (const o of rawOptions) {
+      if (!o || typeof o !== 'object') continue;
+      const oo = o as { label?: unknown; description?: unknown };
+      if (typeof oo.label !== 'string' || !oo.label) continue;
+      options.push({
+        label: oo.label,
+        ...(typeof oo.description === 'string' && oo.description
+          ? { description: oo.description }
+          : {}),
+      });
+    }
+    if (options.length === 0) continue;
+    out.push({
+      question,
+      ...(typeof q.header === 'string' && q.header ? { header: q.header } : {}),
+      ...(q.multiSelect === true ? { multiSelect: true } : {}),
+      options,
+    });
+  }
+  return out;
 }

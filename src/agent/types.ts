@@ -3,12 +3,48 @@ import type { ClaudePermissionMode, CodexSandboxMode } from '../config/permissio
 
 export type { ClaudePermissionMode } from '../config/permissions';
 
+/**
+ * One question inside an `AskUserQuestion` tool call. Mirrors the schema the
+ * claude TUI's built-in `AskUserQuestion` tool accepts.
+ */
+export interface AskUserQuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface AskUserQuestionItem {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: AskUserQuestionOption[];
+}
+
 export type AgentEvent =
   | { type: 'system'; sessionId?: string; threadId?: string; cwd?: string; model?: string }
   | { type: 'text'; delta: string }
   | { type: 'thinking'; delta: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; id: string; output: string; isError: boolean }
+  /**
+   * Special-cased `tool_use` for claude's built-in `AskUserQuestion` tool.
+   * Translators emit this *instead of* a regular `tool_use` so consumers
+   * (bridge bot layer) can present an interactive flow and route the user's
+   * choice back via `AgentRun.answerQuestion`.
+   *
+   * - `id` is the original `tool_use_id` — needed when answering.
+   * - `questions` carries all questions from the single tool call.
+   * - `questionIdx` is the question to present next (0-based). Consumers
+   *   should render one question at a time; the translator emits this event
+   *   only once per tool_use, but the bot can render Q[0], wait for the
+   *   answer, then render Q[1], etc., by calling `answerQuestion` with
+   *   `isLastQuestion` correctly.
+   */
+  | {
+      type: 'ask_user_question';
+      id: string;
+      questions: AskUserQuestionItem[];
+      questionIdx: number;
+    }
   | {
       type: 'usage';
       inputTokens?: number;
@@ -63,6 +99,24 @@ export interface AgentRun {
    * 143 instead of 0; waiting it out lets it exit cleanly.
    */
   waitForExit(timeoutMs: number): Promise<boolean>;
+  /**
+   * Deliver an answer to a pending `AskUserQuestion`. Optional — adapters
+   * that don't surface `ask_user_question` events can omit it.
+   *
+   * - `toolUseId`: the `id` of the originating `ask_user_question` event.
+   * - `selections`: option indices (0-based, in the order claude listed
+   *   them) the user picked for this question. Single-select gets one;
+   *   multi-select can pass multiple.
+   * - `isLastQuestion`: true when this is the final question in the
+   *   tool call. The adapter uses this to commit / submit the whole batch
+   *   (e.g. send Enter at the very end).
+   */
+  answerQuestion?(input: {
+    toolUseId: string;
+    selections: number[];
+    isLastQuestion: boolean;
+    multiSelect: boolean;
+  }): Promise<void>;
 }
 
 /**
