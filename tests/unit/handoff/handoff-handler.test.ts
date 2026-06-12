@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, type Mock } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,39 +21,36 @@ describe('handoff handler', () => {
     home = mkdtempSync(join(tmpdir(), 'lcb-handoff-'));
   });
 
-  function makeDeps(overrides: Partial<Parameters<typeof createHandoffHandler>[0]> = {}) {
+  type HandoffDeps = Parameters<typeof createHandoffHandler>[0];
+
+  interface MockDeps {
+    home: string;
+    sessions: { getRaw: Mock; set: Mock };
+    sessionCatalog: { upsertActive: Mock };
+    agent: { closeSession: Mock };
+    channel: { send: Mock };
+    activeRuns: { interrupt: Mock };
+    resolveOwnerScope: Mock;
+    currentPolicyFingerprint: () => string;
+    logger: HandoffDeps['logger'];
+    _expose: { ownerScope: string; ownerChatId: string };
+  }
+
+  function makeDeps(overrides: Partial<{ resolveOwnerScope: Mock }> = {}): MockDeps {
     const ownerScope = 'p2p:oc_owner';
     const ownerChatId = 'oc_owner';
-    const sessions = {
-      getRaw: vi.fn().mockReturnValue({ sessionId: 'old-session' }),
-      set: vi.fn(),
-    };
-    const sessionCatalog = {
-      upsertActive: vi.fn(),
-    };
-    const agent = {
-      closeSession: vi.fn().mockResolvedValue(undefined),
-    };
-    const channel = {
-      send: vi.fn().mockResolvedValue(undefined),
-    };
-    const activeRuns = {
-      interrupt: vi.fn(),
-    };
-    const resolveOwnerScope = vi
-      .fn()
-      .mockResolvedValue({ scopeId: ownerScope, chatId: ownerChatId });
     return {
       home,
-      sessions,
-      sessionCatalog,
-      agent,
-      channel,
-      activeRuns,
-      resolveOwnerScope,
+      sessions: { getRaw: vi.fn().mockReturnValue({ sessionId: 'old-session' }), set: vi.fn() },
+      sessionCatalog: { upsertActive: vi.fn() },
+      agent: { closeSession: vi.fn().mockResolvedValue(undefined) },
+      channel: { send: vi.fn().mockResolvedValue(undefined) },
+      activeRuns: { interrupt: vi.fn() },
+      resolveOwnerScope:
+        overrides.resolveOwnerScope ??
+        vi.fn().mockResolvedValue({ scopeId: ownerScope, chatId: ownerChatId }),
       currentPolicyFingerprint: () => 'fp-1',
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      ...overrides,
       _expose: { ownerScope, ownerChatId },
     };
   }
@@ -62,7 +59,7 @@ describe('handoff handler', () => {
     const cwd = '/Users/test/proj';
     makeJsonl(home, cwd, 'new-session', userLine);
     const deps = makeDeps();
-    const handle = createHandoffHandler(deps);
+    const handle = createHandoffHandler(deps as unknown as HandoffDeps);
     const res = await handle({ op: 'handoff', cwd, sessionId: 'new-session' });
 
     expect(res.ok).toBe(true);
@@ -91,7 +88,7 @@ describe('handoff handler', () => {
     makeJsonl(home, cwd, 'same-session', userLine);
     const deps = makeDeps();
     deps.sessions.getRaw.mockReturnValue({ sessionId: 'same-session' });
-    const handle = createHandoffHandler(deps);
+    const handle = createHandoffHandler(deps as unknown as HandoffDeps);
     await handle({ op: 'handoff', cwd, sessionId: 'same-session' });
     expect(deps.agent.closeSession).not.toHaveBeenCalled();
   });
@@ -99,7 +96,7 @@ describe('handoff handler', () => {
   it('returns session-not-found and does NOT mutate state when jsonl missing', async () => {
     const cwd = '/Users/test/proj';
     const deps = makeDeps();
-    const handle = createHandoffHandler(deps);
+    const handle = createHandoffHandler(deps as unknown as HandoffDeps);
     const res = await handle({ op: 'handoff', cwd, sessionId: 'ghost' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('session-not-found');
@@ -112,7 +109,7 @@ describe('handoff handler', () => {
     const cwd = '/Users/test/proj';
     makeJsonl(home, cwd, 's', userLine);
     const deps = makeDeps({ resolveOwnerScope: vi.fn().mockResolvedValue(null) });
-    const handle = createHandoffHandler(deps);
+    const handle = createHandoffHandler(deps as unknown as HandoffDeps);
     const res = await handle({ op: 'handoff', cwd, sessionId: 's' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('owner-chat-unreachable');
