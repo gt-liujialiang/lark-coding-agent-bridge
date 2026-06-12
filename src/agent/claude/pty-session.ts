@@ -3,7 +3,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { log } from '../../core/logger';
-import type { AgentEvent } from '../types';
+import type { AgentEvent, TurnSnapshot } from '../types';
 import { sessionJsonlPath } from './jsonl-path';
 import { JsonlReader } from './jsonl-reader';
 import { JsonlTurnTranslator } from './jsonl-translate';
@@ -19,8 +19,17 @@ export interface PtySessionOptions {
   pollMs?: number;
   /** Delay between prompt body and trailing CR. Default 200ms. */
   promptDelayMs?: number;
-  /** Max turn duration (ms) before soft-interrupt + timeout error. */
-  maxTurnMs?: number;
+  /**
+   * Idle checkpoint cadence (ms). The Nth entry is how long the JSONL must stay
+   * silent before the Nth `idle_checkpoint` event fires; after the array is
+   * exhausted, the last value repeats. Default: 10min → 30min → 60min → 60min …
+   *
+   * Checkpoints never terminate the turn — they only surface a status snapshot
+   * for the caller to act on (e.g. send a "still waiting?" card to the user).
+   * Any new JSONL activity, or a `resetIdleCheckpoint()` call, restarts the
+   * cadence from the first threshold.
+   */
+  idleCheckpointsMs?: readonly number[];
   /** Quiet-window required for first-turn readiness. Default 1000ms. */
   readinessQuietMs?: number;
   /** Max wait for first-turn readiness. Default 30000ms. */
@@ -49,7 +58,14 @@ const CONSENT_DIALOGS: ConsentDialog[] = [
 const ROLLING_BUFFER_BYTES = 8192;
 const DEFAULT_POLL_MS = 300;
 const DEFAULT_PROMPT_DELAY_MS = 200;
-const DEFAULT_MAX_TURN_MS = 10 * 60 * 1000;
+// Default check-in cadence: nudge the caller after 10 min of JSONL silence,
+// then back off to 30 min, then settle at 60 min repeats. The turn keeps
+// running across all of these — these are notifications, not deadlines.
+const DEFAULT_IDLE_CHECKPOINTS_MS: readonly number[] = [
+  10 * 60 * 1000,
+  30 * 60 * 1000,
+  60 * 60 * 1000,
+] as const;
 const READINESS_MAX_MS = 30_000;
 const READINESS_QUIET_MS = 1_000;
 
@@ -73,6 +89,12 @@ export class PtySession {
   private exitInfo: { exitCode: number; signal?: number } | undefined;
   private busy = false;
   private interruptRequested = false;
+  // Per-turn observability — populated while runTurn is active, cleared otherwise.
+  private translator: JsonlTurnTranslator | null = null;
+  private turnStartedAt = 0;
+  private lastEntryAt = 0;
+  // Flipped by `resetIdleCheckpoint()`; the runTurn loop drains it next tick.
+  private idleCheckpointResetRequested = false;
 
   private readonly debugDumpPath: string | undefined;
 
@@ -282,7 +304,10 @@ export class PtySession {
       await this.waitForReady();
 
       await this.syncCursorToTail();
-      const translator = new JsonlTurnTranslator();
+      this.translator = new JsonlTurnTranslator();
+      this.turnStartedAt = Date.now();
+      this.lastEntryAt = Date.now();
+      this.idleCheckpointResetRequested = false;
       this.interruptRequested = false;
 
       // claude's TUI treats `\n` in input as "newline in multi-line input
@@ -297,7 +322,13 @@ export class PtySession {
       this.opts.pty.write('\r');
 
       const pollMs = this.opts.pollMs ?? DEFAULT_POLL_MS;
-      const deadline = Date.now() + (this.opts.maxTurnMs ?? DEFAULT_MAX_TURN_MS);
+      const checkpointDeltas = this.opts.idleCheckpointsMs ?? DEFAULT_IDLE_CHECKPOINTS_MS;
+      let firedCheckpoints = 0;
+      let nextCheckpointAt = Date.now() + checkpointDeltas[0]!;
+      const restartCheckpointCadence = (): void => {
+        firedCheckpoints = 0;
+        nextCheckpointAt = Date.now() + checkpointDeltas[0]!;
+      };
 
       while (true) {
         if (!this.alive) {
@@ -311,8 +342,12 @@ export class PtySession {
           return;
         }
         const { entries } = await this.reader.readNew();
+        if (entries.length > 0) {
+          this.lastEntryAt = Date.now();
+          restartCheckpointCadence();
+        }
         for (const e of entries) {
-          for (const ev of translator.translate(e)) {
+          for (const ev of this.translator.translate(e)) {
             yield ev;
             if (ev.type === 'done') return;
           }
@@ -321,20 +356,63 @@ export class PtySession {
           yield { type: 'done', terminationReason: 'interrupted' };
           return;
         }
-        if (Date.now() > deadline) {
-          this.opts.pty.write('\x1b');
-          yield {
-            type: 'error',
-            message: 'claude turn exceeded max duration',
-            terminationReason: 'timeout',
-          };
-          return;
+        if (this.idleCheckpointResetRequested) {
+          this.idleCheckpointResetRequested = false;
+          this.lastEntryAt = Date.now();
+          restartCheckpointCadence();
+        }
+        if (Date.now() >= nextCheckpointAt) {
+          firedCheckpoints += 1;
+          const snap = this.snapshot();
+          if (snap) {
+            yield {
+              type: 'idle_checkpoint',
+              idleMs: Date.now() - this.lastEntryAt,
+              checkpointNumber: firedCheckpoints,
+              snapshot: snap,
+            };
+          }
+          const nextIdx = Math.min(firedCheckpoints, checkpointDeltas.length - 1);
+          nextCheckpointAt = Date.now() + checkpointDeltas[nextIdx]!;
         }
         await delay(pollMs);
       }
     } finally {
       this.busy = false;
+      this.translator = null;
     }
+  }
+
+  /**
+   * Snapshot of the currently running turn — null when no turn is active.
+   * Combines wall-clock timing (turn start, last JSONL activity) with the
+   * translator's per-turn state (in-flight tools, latest todo list, text tail,
+   * tokens). Safe to call from any thread/event handler; reads only the
+   * snapshot of internal state and does not mutate anything.
+   */
+  snapshot(): TurnSnapshot | null {
+    if (!this.translator) return null;
+    const t = this.translator.snapshot();
+    return {
+      turnStartedAt: this.turnStartedAt,
+      lastEntryAt: this.lastEntryAt,
+      entriesSeen: t.entriesSeen,
+      inFlightTools: t.inFlightTools,
+      lastCompletedTool: t.lastCompletedTool,
+      lastTextTail: t.lastTextTail,
+      todos: t.todos,
+      tokens: t.tokens,
+    };
+  }
+
+  /**
+   * Tell the runTurn loop to behave as if the JSONL just received new activity:
+   * resets the idle baseline and the checkpoint backoff. Use this when the user
+   * has responded to a check-in card with "keep waiting" — the next checkpoint
+   * should fire after the *first* threshold again, not the backed-off one.
+   */
+  resetIdleCheckpoint(): void {
+    this.idleCheckpointResetRequested = true;
   }
 
   /**

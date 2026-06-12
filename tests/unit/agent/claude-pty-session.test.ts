@@ -325,4 +325,193 @@ describe('PtySession', () => {
     });
     expect(session.isAlive()).toBe(false);
   });
+
+  it('emits idle_checkpoint with snapshot when JSONL goes silent, without ending the turn', async () => {
+    const cwd = '/Users/me/proj';
+    const sessionId = 'sess-checkpoint';
+    const home = await makeJsonlHome(cwd, sessionId);
+    const stub = createStubPty();
+    const jsonl = join(home, '.claude', 'projects', encodeCwdForClaudeProjects(cwd), `${sessionId}.jsonl`);
+    const session = new PtySession({
+      pty: stub.handle,
+      cwd,
+      sessionId,
+      home,
+      pollMs: 5,
+      promptDelayMs: 1,
+      readinessQuietMs: 0,
+      // Three checkpoints at 30/60/60 ms — short enough for tests.
+      idleCheckpointsMs: [30, 60, 60],
+    });
+
+    setTimeout(async () => {
+      await appendFile(
+        jsonl,
+        JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'sleep 999' } },
+            ],
+          },
+        }) + '\n',
+      );
+    }, 5);
+
+    const events: AgentEvent[] = [];
+    const iter = session.runTurn('hi')[Symbol.asyncIterator]();
+    try {
+      // Collect 2 checkpoints — proves backoff actually advances, not just one firing repeatedly.
+      let checkpointsSeen = 0;
+      while (checkpointsSeen < 2) {
+        const { value, done } = await iter.next();
+        if (done) break;
+        events.push(value);
+        if (value.type === 'idle_checkpoint') checkpointsSeen += 1;
+      }
+    } finally {
+      await session.softInterrupt(50);
+      // Drain remaining events so the generator's `finally` runs.
+      for await (const ev of { [Symbol.asyncIterator]: () => iter }) events.push(ev);
+    }
+
+    const checkpoints = events.filter((e) => e.type === 'idle_checkpoint') as Array<
+      Extract<AgentEvent, { type: 'idle_checkpoint' }>
+    >;
+    expect(checkpoints.length).toBeGreaterThanOrEqual(2);
+    expect(checkpoints[0]!.checkpointNumber).toBe(1);
+    expect(checkpoints[1]!.checkpointNumber).toBe(2);
+    expect(checkpoints[0]!.snapshot.inFlightTools[0]?.name).toBe('Bash');
+    expect(checkpoints[0]!.snapshot.inFlightTools[0]?.label).toContain('sleep 999');
+    expect(checkpoints[0]!.snapshot.lastEntryAt).toBeGreaterThan(0);
+    // Second checkpoint must wait at least the 2nd backoff (60ms) past the first.
+    expect(checkpoints[1]!.idleMs).toBeGreaterThan(checkpoints[0]!.idleMs);
+  });
+
+  it('resetIdleCheckpoint() restarts the backoff and JSONL progress prevents checkpoints', async () => {
+    const cwd = '/Users/me/proj';
+    const sessionId = 'sess-progress';
+    const home = await makeJsonlHome(cwd, sessionId);
+    const stub = createStubPty();
+    const jsonl = join(home, '.claude', 'projects', encodeCwdForClaudeProjects(cwd), `${sessionId}.jsonl`);
+    const session = new PtySession({
+      pty: stub.handle,
+      cwd,
+      sessionId,
+      home,
+      pollMs: 5,
+      promptDelayMs: 1,
+      readinessQuietMs: 0,
+      // 40ms first checkpoint; keep entries flowing faster than that → no checkpoint.
+      idleCheckpointsMs: [40, 40, 40],
+    });
+
+    let cancelled = false;
+    (async () => {
+      for (let i = 0; i < 10; i++) {
+        if (cancelled) return;
+        await new Promise((r) => setTimeout(r, 20));
+        await appendFile(
+          jsonl,
+          JSON.stringify({
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: `chunk-${i}` }] },
+          }) + '\n',
+        );
+      }
+      await appendFile(
+        jsonl,
+        JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [],
+            stop_reason: 'end_turn',
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        }) + '\n',
+      );
+      await appendFile(
+        jsonl,
+        JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 200 }) + '\n',
+      );
+    })();
+
+    const events: AgentEvent[] = [];
+    try {
+      for await (const ev of session.runTurn('go')) events.push(ev);
+    } finally {
+      cancelled = true;
+    }
+
+    expect(events.at(-1)?.type).toBe('done');
+    expect(events.some((e) => e.type === 'idle_checkpoint')).toBe(false);
+  });
+
+  it('snapshot() returns null outside a turn and the live state during one', async () => {
+    const cwd = '/Users/me/proj';
+    const sessionId = 'sess-snap';
+    const home = await makeJsonlHome(cwd, sessionId);
+    const stub = createStubPty();
+    const jsonl = join(home, '.claude', 'projects', encodeCwdForClaudeProjects(cwd), `${sessionId}.jsonl`);
+    const session = new PtySession({
+      pty: stub.handle,
+      cwd,
+      sessionId,
+      home,
+      pollMs: 5,
+      promptDelayMs: 1,
+      readinessQuietMs: 0,
+    });
+
+    expect(session.snapshot()).toBeNull();
+
+    const iter = session.runTurn('plan it')[Symbol.asyncIterator]();
+    setTimeout(async () => {
+      await appendFile(
+        jsonl,
+        JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'text', text: 'thinking...' },
+              {
+                type: 'tool_use',
+                id: 'tc-1',
+                name: 'TaskCreate',
+                input: {
+                  todos: [
+                    { content: 'A', status: 'completed' },
+                    { content: 'B', status: 'in_progress' },
+                    { content: 'C', status: 'pending' },
+                  ],
+                },
+              },
+            ],
+          },
+        }) + '\n',
+      );
+    }, 5);
+
+    // Pull events until both the text and the tool_use have been processed.
+    let gotText = false;
+    let gotTool = false;
+    while (!gotText || !gotTool) {
+      const { value, done } = await iter.next();
+      if (done) break;
+      if (value.type === 'text') gotText = true;
+      if (value.type === 'tool_use') gotTool = true;
+    }
+
+    const snap = session.snapshot();
+    expect(snap).not.toBeNull();
+    expect(snap!.lastTextTail).toContain('thinking');
+    expect(snap!.todos?.total).toBe(3);
+    expect(snap!.todos?.completed).toBe(1);
+    expect(snap!.todos?.inProgressIdx).toBe(1);
+    expect(snap!.entriesSeen).toBe(1);
+
+    await session.softInterrupt(50);
+    for await (const _ of { [Symbol.asyncIterator]: () => iter }) { /* drain */ }
+    expect(session.snapshot()).toBeNull();
+  });
 });
