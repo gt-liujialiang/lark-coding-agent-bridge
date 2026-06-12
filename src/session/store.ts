@@ -119,6 +119,11 @@ export class SessionStore {
     this.schedulePersist();
   }
 
+  /** Return all scope keys currently tracked in the store. */
+  allScopes(): string[] {
+    return Object.keys(this.data);
+  }
+
   /** Remove the override so this scope falls back to the global default.
    * Returns true if something was actually removed. */
   clearIdleTimeoutOverride(chatId: string): boolean {

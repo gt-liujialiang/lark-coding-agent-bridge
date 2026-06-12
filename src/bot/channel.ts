@@ -4,7 +4,10 @@ import type {
   NormalizedMessage,
 } from '@larksuite/channel';
 import { createLarkChannel } from '@larksuite/channel';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { startControlSocket } from '../runtime/control-socket.js';
+import { createHandoffHandler } from '../runtime/handoff-handler.js';
 import { claudeCapability, codexCapability } from '../agent/capability';
 import {
   buildAgentPrompt,
@@ -153,6 +156,23 @@ function stringifyArgs(args: unknown[]): string {
       }
     })
     .join(' ');
+}
+
+/**
+ * Try to find a p2p scope in the session store whose key matches the owner's
+ * open_id. Since p2p scopes in this codebase are keyed by chatId (not
+ * open_id), this helper returns the first scope that equals `ownerOpenId`.
+ * If the owner has never messaged the bot, `ownerOpenId` is returned as a
+ * best-effort fallback so the handoff card is still delivered.
+ */
+function findOwnerScopeId(sessions: SessionStore, ownerOpenId: string): string {
+  const scopes = sessions.allScopes();
+  // Prefer an exact match on the owner's open_id (covers cases where the p2p
+  // scope was stored under the open_id, e.g. from a prior handoff).
+  if (scopes.includes(ownerOpenId)) return ownerOpenId;
+  // Fall back to the open_id itself. Lark accepts open_id as a chatId target
+  // for DM sends, so the card notification will still be delivered.
+  return ownerOpenId;
 }
 
 export interface BridgeChannel {
@@ -414,9 +434,58 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     forceReconnect: () => controls.restart(),
   });
 
+  // Control socket — bound to <profileDir>/control.sock so CLI tools can
+  // reach the running bridge over a Unix-domain socket without polling.
+  const socketPath = deps.appPaths?.mediaDir
+    ? join(deps.appPaths.mediaDir, '..', 'control.sock')
+    : undefined;
+
+  const handoffHandler = createHandoffHandler({
+    home: homedir(),
+    sessions,
+    sessionCatalog: sessionCatalog ?? { upsertActive: () => {} },
+    agent,
+    channel: {
+      send: async (chatId: string, payload: { card: unknown }) => {
+        await channel.send(chatId, { card: payload.card as object });
+      },
+    },
+    activeRuns,
+    resolveOwnerScope: async () => {
+      const ownerId = controls.botOwnerId;
+      if (!ownerId) return null;
+      const scopeId = findOwnerScopeId(sessions, ownerId);
+      return { scopeId, chatId: ownerId };
+    },
+    currentPolicyFingerprint: () =>
+      activePolicyFingerprints.get(controls.botOwnerId ?? '') ?? 'default',
+    logger: {
+      info: (msg, ctx) => log.info('handoff', msg, ctx),
+      warn: (msg, ctx) => log.warn('handoff', msg, ctx),
+      error: (msg, ctx) => log.warn('handoff', msg, ctx),
+    },
+  });
+
+  let controlServer: Awaited<ReturnType<typeof startControlSocket>> | undefined;
+  if (socketPath) {
+    try {
+      controlServer = await startControlSocket({
+        socketPath,
+        handlers: { handoff: handoffHandler },
+      });
+      log.info('control_socket', 'listening', { socketPath });
+    } catch (err) {
+      log.warn('control_socket', 'listen_failed', {
+        socketPath,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return {
     channel,
     disconnect: async () => {
+      await controlServer?.close();
       activeRuns.pauseNewRuns('bridge-disconnect');
       ownerRefresh.stop();
       knownChatsRefresh.stop();
