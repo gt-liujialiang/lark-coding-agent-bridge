@@ -22,7 +22,7 @@ export interface PtySessionOptions {
   /**
    * Idle checkpoint cadence (ms). The Nth entry is how long the JSONL must stay
    * silent before the Nth `idle_checkpoint` event fires; after the array is
-   * exhausted, the last value repeats. Default: 10min → 30min → 60min → 60min …
+   * exhausted, the last value repeats. Default: 3min → 10min → 30min → 30min …
    *
    * Checkpoints never terminate the turn — they only surface a status snapshot
    * for the caller to act on (e.g. send a "still waiting?" card to the user).
@@ -58,13 +58,13 @@ const CONSENT_DIALOGS: ConsentDialog[] = [
 const ROLLING_BUFFER_BYTES = 8192;
 const DEFAULT_POLL_MS = 300;
 const DEFAULT_PROMPT_DELAY_MS = 200;
-// Default check-in cadence: nudge the caller after 10 min of JSONL silence,
-// then back off to 30 min, then settle at 60 min repeats. The turn keeps
+// Default check-in cadence: nudge the caller after 3 min of JSONL silence,
+// then back off to 10 min, then settle at 30 min repeats. The turn keeps
 // running across all of these — these are notifications, not deadlines.
 const DEFAULT_IDLE_CHECKPOINTS_MS: readonly number[] = [
+  3 * 60 * 1000,
   10 * 60 * 1000,
   30 * 60 * 1000,
-  60 * 60 * 1000,
 ] as const;
 const READINESS_MAX_MS = 30_000;
 const READINESS_QUIET_MS = 1_000;
@@ -136,6 +136,11 @@ export class PtySession {
 
   isAlive(): boolean {
     return this.alive;
+  }
+
+  /** True between runTurn entry and its `finally` cleanup. */
+  isBusy(): boolean {
+    return this.busy;
   }
 
   private handleData(s: string): void {
@@ -425,6 +430,30 @@ export class PtySession {
     this.opts.pty.write('\x1b');
     this.interruptRequested = true;
     await delay(graceMs);
+  }
+
+  /**
+   * Terminate the current turn with guaranteed exit. First soft-interrupts
+   * (ESC + wait `softGraceMs` for runTurn to yield done(interrupted)); if the
+   * turn is still running after that, escalates to `hardClose` (SIGTERM →
+   * SIGKILL) so a stuck PTY can't lock the chat queue forever.
+   *
+   * The soft path is the common case — ESC reaches the claude TUI, runTurn's
+   * next poll cycle sees `interruptRequested`, yields done(interrupted), and
+   * `busy` flips false within softGraceMs. The hard path only fires when ESC
+   * really got eaten (假活 PTY) or runTurn's poll loop is stuck.
+   *
+   * After a hard escalation the PTY is dead; the pool will spawn a fresh one
+   * for the next turn. After a soft success, the PTY stays alive for reuse.
+   */
+  async terminate(softGraceMs = 5000, hardGraceMs = 3000): Promise<void> {
+    await this.softInterrupt(softGraceMs);
+    if (!this.busy) return;
+    log.warn('agent', 'claude-soft-interrupt-failed-escalating', {
+      sessionId: this.opts.sessionId,
+      softGraceMs,
+    });
+    await this.hardClose(hardGraceMs);
   }
 
   /**

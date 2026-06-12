@@ -447,6 +447,81 @@ describe('PtySession', () => {
     expect(events.some((e) => e.type === 'idle_checkpoint')).toBe(false);
   });
 
+  it('terminate() resolves via soft-interrupt when runTurn yields interrupted in time', async () => {
+    const cwd = '/Users/me/proj';
+    const sessionId = 'sess-term-soft';
+    const home = await makeJsonlHome(cwd, sessionId);
+    const stub = createStubPty();
+    const session = new PtySession({
+      pty: stub.handle,
+      cwd,
+      sessionId,
+      home,
+      pollMs: 5, // small enough that runTurn ticks before terminate's grace expires
+      promptDelayMs: 1,
+      readinessQuietMs: 0,
+    });
+
+    const killCalls: Array<string | undefined> = [];
+    (stub.handle as { kill: (sig?: string) => void }).kill = (sig) => {
+      killCalls.push(sig);
+    };
+
+    const events: AgentEvent[] = [];
+    const drain = (async () => {
+      for await (const ev of session.runTurn('hi')) events.push(ev);
+    })();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(session.isBusy()).toBe(true);
+
+    await session.terminate(100, 50);
+    await drain;
+
+    // Soft path: ESC was written, no kill signals issued, last event is interrupted.
+    expect(stub.writes).toContain('\x1b');
+    expect(killCalls).toEqual([]);
+    expect(events.at(-1)).toEqual({ type: 'done', terminationReason: 'interrupted' });
+    expect(session.isBusy()).toBe(false);
+  });
+
+  it('terminate() escalates to hardClose when soft interrupt does not clear busy in time', async () => {
+    const cwd = '/Users/me/proj';
+    const sessionId = 'sess-term-esc';
+    const home = await makeJsonlHome(cwd, sessionId);
+    const stub = createStubPty();
+    const session = new PtySession({
+      pty: stub.handle,
+      cwd,
+      sessionId,
+      home,
+      pollMs: 500, // far longer than softGraceMs below, so runTurn won't tick before soft returns
+      promptDelayMs: 1,
+      readinessQuietMs: 0,
+    });
+
+    const killCalls: Array<string | undefined> = [];
+    (stub.handle as { kill: (sig?: string) => void }).kill = (sig) => {
+      killCalls.push(sig);
+      // Simulate a PTY actually exiting on SIGTERM so the hardClose loop ends.
+      stub.emitExit(143, undefined);
+    };
+
+    const events: AgentEvent[] = [];
+    const drain = (async () => {
+      for await (const ev of session.runTurn('hi')) events.push(ev);
+    })();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(session.isBusy()).toBe(true);
+
+    // softGraceMs=20 ≪ pollMs=500 → softInterrupt returns before runTurn ticks.
+    await session.terminate(20, 50);
+    await drain;
+
+    expect(stub.writes).toContain('\x1b');
+    expect(killCalls).toContain('SIGTERM');
+    expect(session.isAlive()).toBe(false);
+  });
+
   it('snapshot() returns null outside a turn and the live state during one', async () => {
     const cwd = '/Users/me/proj';
     const sessionId = 'sess-snap';

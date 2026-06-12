@@ -132,7 +132,12 @@ export class ClaudeAdapter implements AgentAdapter {
         if (!session) {
           try { session = await acquire(); } catch { return; }
         }
-        await session.softInterrupt(stopGraceMs);
+        // Use terminate() (soft + escalated hard) rather than raw
+        // softInterrupt: a user clicking [立即终止] on a checkpoint card
+        // expects the turn to *actually* end. If ESC gets eaten by a hung
+        // TUI / paste-mode the soft path silently no-ops, and without
+        // escalation the chat queue would stay locked indefinitely.
+        await session.terminate(stopGraceMs);
       },
       async waitForExit(_timeoutMs: number): Promise<boolean> {
         // PTY world: "exit" === "current turn done". The caller already
