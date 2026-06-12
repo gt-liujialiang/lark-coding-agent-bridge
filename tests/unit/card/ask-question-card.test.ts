@@ -37,7 +37,7 @@ describe('renderAskQuestionCard', () => {
     expect(((buttons[1]?.behaviors?.[0]?.value) as { __aq: { selectedIndex: number } }).__aq.selectedIndex).toBe(1);
   });
 
-  it('renders a multi-select question as a form with checker + submit', () => {
+  it('renders a multi-select question as a form with multi_select_static + submit', () => {
     const card = renderAskQuestionCard({
       toolUseId: 'toolu_y',
       questionIdx: 1,
@@ -53,11 +53,12 @@ describe('renderAskQuestionCard', () => {
     const els = card.body.elements;
     expect((els[0] as { content: string }).content).toMatch(/Pick fruits/);
     expect((els[0] as { content: string }).content).toMatch(/\(2\/2\)/);
-    const form = els.find((e) => e.tag === 'form') as { elements: ({ tag: 'checker'; options: { value: string; text: { content: string } }[] } | { tag: 'button'; behaviors: { value: Record<string, unknown> }[] })[] };
+    const form = els.find((e) => e.tag === 'form') as { elements: ({ tag: 'multi_select_static'; name: string; options: { value: string; text: { content: string } }[] } | { tag: 'button'; behaviors: { value: Record<string, unknown> }[] })[] };
     expect(form).toBeTruthy();
-    const checker = form.elements.find((e) => e.tag === 'checker') as { options: { value: string; text: { content: string } }[] };
-    expect(checker.options.map((o) => o.value)).toEqual(['0', '1', '2']);
-    expect(checker.options.map((o) => o.text.content)).toEqual(['Apple', 'Banana', 'Cherry']);
+    const ms = form.elements.find((e) => e.tag === 'multi_select_static') as { name: string; options: { value: string; text: { content: string } }[] };
+    expect(ms.name).toBe('aq_options');
+    expect(ms.options.map((o) => o.value)).toEqual(['0', '1', '2']);
+    expect(ms.options.map((o) => o.text.content)).toEqual(['Apple', 'Banana', 'Cherry']);
     const submit = form.elements.find((e) => e.tag === 'button') as unknown as { behaviors: { value: { __aq: { questionIdx: number; toolUseId: string; selectedIndex?: number } } }[] };
     expect(submit.behaviors[0]?.value.__aq.toolUseId).toBe('toolu_y');
     expect(submit.behaviors[0]?.value.__aq.questionIdx).toBe(1);

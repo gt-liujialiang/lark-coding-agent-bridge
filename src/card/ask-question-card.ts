@@ -32,16 +32,19 @@ export function renderAskQuestionCard(input: AskQuestionCardInput): object {
   const elements: object[] = [{ tag: 'markdown', content: heading }];
 
   if (isMulti) {
-    // Multi-select: form with a checkbox group + Submit button. The submit
-    // button's `value` carries the bridge callback; the form's other input
-    // values arrive as `form_value` to the dispatcher.
+    // Multi-select: form with a multi-select dropdown + Submit button.
+    // (Lark's `checker` is a single boolean checkbox, not a checkbox-group;
+    // `multi_select_static` is the right element for "pick N from a list".)
+    // The submit button's `value` carries the bridge callback; the form's
+    // selected values arrive as `form_value.aq_options` to the dispatcher.
     elements.push({
       tag: 'form',
       name: 'aq_form',
       elements: [
         {
-          tag: 'checker',
+          tag: 'multi_select_static',
           name: 'aq_options',
+          placeholder: { tag: 'plain_text', content: '点这里选择（可多选）' },
           options: question.options.map((opt, idx) => ({
             value: String(idx),
             text: { tag: 'plain_text', content: optionLabel(opt) },
