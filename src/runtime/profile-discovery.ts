@@ -4,6 +4,27 @@ import { resolveAppPaths } from '../config/app-paths';
 import { loadRootConfig, readActiveProfile } from '../config/profile-store';
 import type { AgentKind } from '../config/profile-schema';
 
+/**
+ * Returns the per-profile directory (the parent of mediaDir, logsDir, etc.)
+ * for the named profile, or for the currently active profile if no name is
+ * given.  Returns `undefined` when the active profile cannot be determined
+ * (e.g. the bridge has never been started and no config exists yet).
+ */
+export async function resolveProfileDir(profileName?: string): Promise<string | undefined> {
+  if (profileName) {
+    return resolveAppPaths({ profile: profileName }).profileDir;
+  }
+  const rootPaths = resolveAppPaths();
+  const activeProfile = await readActiveProfile(rootPaths.rootDir);
+  if (!activeProfile) {
+    // Try to read from root config as a fallback.
+    const root = await loadRootConfig(rootPaths.configFile);
+    if (!root) return undefined;
+    return resolveAppPaths({ rootDir: rootPaths.rootDir, profile: root.activeProfile }).profileDir;
+  }
+  return resolveAppPaths({ rootDir: rootPaths.rootDir, profile: activeProfile }).profileDir;
+}
+
 export interface DiscoveredProfile {
   name: string;
   active: boolean;
