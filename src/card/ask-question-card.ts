@@ -1,4 +1,4 @@
-import type { AskUserQuestionItem } from '../agent/types';
+import type { AskUserQuestionItem, AskUserQuestionOption } from '../agent/types';
 
 /**
  * Render one question of an `AskUserQuestion` tool call as a Lark
@@ -97,6 +97,43 @@ function optionLabel(opt: { label: string; description?: string }): string {
  * Build the callback value payload. `selectedIndex` is undefined for the
  * multi-select submit button (selections come from `form_value.aq_options`).
  */
+/**
+ * Render a *frozen* / submitted view of an AskUserQuestion card, replacing
+ * the original interactive elements with the chosen answers. Sent as an
+ * in-place card update so the original card stops being clickable.
+ */
+export function renderAskQuestionAnsweredCard(input: {
+  question: AskUserQuestionItem;
+  questionIdx: number;
+  totalQuestions: number;
+  selectedIndices: number[];
+}): object {
+  const { question, questionIdx, totalQuestions, selectedIndices } = input;
+  const progressLabel = totalQuestions > 1 ? ` (${questionIdx + 1}/${totalQuestions})` : '';
+  const heading = question.header
+    ? `🤔 **${escapeMd(question.header)}**${progressLabel}\n\n${escapeMd(question.question)}`
+    : `🤔 ${escapeMd(question.question)}${progressLabel}`;
+  const chosen = selectedIndices
+    .map((i) => question.options[i])
+    .filter((o): o is AskUserQuestionOption => Boolean(o))
+    .map((o) => `✅ ${escapeMd(o.label)}`)
+    .join('\n');
+  const answerBody = chosen
+    ? `**已选**\n${chosen}`
+    : '_（已提交，无选项）_';
+  return {
+    schema: '2.0',
+    config: { summary: { content: question.header ?? '已提交' } },
+    body: {
+      elements: [
+        { tag: 'markdown', content: heading },
+        { tag: 'hr' },
+        { tag: 'markdown', content: answerBody },
+      ],
+    },
+  };
+}
+
 function bridgePayload(input: AskQuestionCardInput, selectedIndex: number | undefined): Record<string, unknown> {
   return {
     __bridge_cb: true,

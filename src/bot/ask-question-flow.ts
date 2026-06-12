@@ -1,6 +1,6 @@
 import type { LarkChannel } from '@larksuite/channel';
 import type { AgentRun, AskUserQuestionItem } from '../agent/types';
-import { renderAskQuestionCard } from '../card/ask-question-card';
+import { renderAskQuestionAnsweredCard, renderAskQuestionCard } from '../card/ask-question-card';
 import { log } from '../core/logger';
 
 export interface AskQuestionAnswerInput {
@@ -32,6 +32,10 @@ export class AskQuestionFlow {
         toolUseId: string;
         questions: AskUserQuestionItem[];
         currentIdx: number;
+        /** messageId of the card we sent for the *current* question, so we
+         * can replace it with a non-interactive answered view after the
+         * user submits. */
+        currentCardMessageId?: string;
       };
 
   constructor(
@@ -90,6 +94,28 @@ export class AskQuestionFlow {
     const selections = parseSelections(input, question);
     const isLastQuestion = this.state.currentIdx === this.state.questions.length - 1;
 
+    // Replace the just-answered card with a non-interactive snapshot so
+    // double-clicks / late re-tries can't re-submit. Best-effort: if
+    // update fails the user might be able to click again, but the
+    // dispatcher's nonce-replay guard catches that on the bridge side.
+    const answeredMsgId = this.state.currentCardMessageId;
+    if (answeredMsgId) {
+      const answeredCard = renderAskQuestionAnsweredCard({
+        question,
+        questionIdx: this.state.currentIdx,
+        totalQuestions: this.state.questions.length,
+        selectedIndices: selections,
+      });
+      try {
+        await this.opts.channel.updateCard(answeredMsgId, answeredCard);
+      } catch (err) {
+        log.warn('agent', 'ask-question-freeze-card-failed', {
+          messageId: answeredMsgId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     if (!this.opts.run.answerQuestion) {
       log.warn('agent', 'ask-question-no-answer-impl', { toolUseId: input.toolUseId });
       return;
@@ -138,12 +164,14 @@ export class AskQuestionFlow {
       bridgeToken: this.opts.signBridgeToken('agent_callback'),
     });
     try {
-      await this.opts.channel.send(this.opts.chatId, { card }, this.opts.sendOpts);
+      const sendResult = await this.opts.channel.send(this.opts.chatId, { card }, this.opts.sendOpts);
+      this.state.currentCardMessageId = sendResult.messageId;
       log.info('agent', 'ask-question-card-sent', {
         toolUseId: this.state.toolUseId,
         questionIdx: this.state.currentIdx,
         multiSelect: question.multiSelect === true,
         optionCount: question.options.length,
+        messageId: sendResult.messageId,
       });
     } catch (err) {
       log.warn('agent', 'ask-question-card-send-failed', {

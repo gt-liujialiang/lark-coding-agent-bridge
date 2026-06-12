@@ -839,6 +839,17 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             await cardCtrl.update(renderCard(filterForPrefs(state), cardRenderOptions));
           }
         },
+        async (state) => {
+          // Post-AskUserQuestion: send claude's continuation as a brand-new
+          // card so the user gets a fresh message instead of seeing the
+          // pre-question card mutate further.
+          if (state.blocks.length === 0 && state.terminal === 'running') return;
+          await channel.send(
+            chatId,
+            { card: renderCard(filterForPrefs(state), cardRenderOptions) },
+            sendOpts,
+          );
+        },
       );
       const streamDone = channel.stream(
         chatId,
@@ -946,9 +957,22 @@ async function processAgentStream(
   idleTimeoutMs: number | undefined,
   recordSession: (event: AgentEvent) => void,
   flush: (state: RunState) => Promise<void>,
+  /**
+   * When provided and an `ask_user_question` event arrives mid-turn, the
+   * current streaming card is finalized via `flush` and all subsequent
+   * events are accumulated into a fresh `RunState`. On terminal, that
+   * accumulated state is rendered via `flushNewCard` instead of updating
+   * the original card — the user sees the post-answer reply as a new
+   * message.
+   */
+  flushNewCard?: (state: RunState) => Promise<void>,
 ): Promise<RunState> {
   const runStart = Date.now();
   let state: RunState = initialState;
+  /** When defined, we're in the post-AskUserQuestion accumulation phase.
+   * Events go here instead of into `state`; on terminal we render this as
+   * a new card. Stays `undefined` for runs that never call AskUserQuestion. */
+  let postAskState: RunState | undefined;
 
   // Idle watchdog: claude going silent for `idleTimeoutMs` is treated as
   // "presumed hung", we stop() and surface a timeout marker on the card.
@@ -1007,10 +1031,6 @@ async function processAgentStream(
         continue;
       }
       if (evt.type === 'ask_user_question') {
-        // Special: don't fold into RunState (the streaming card stays in
-        // "thinking" mode). Send a separate interactive card via the run's
-        // bound AskQuestionFlow; the user click routes back through the
-        // card dispatcher.
         if (handle.askQuestion) {
           try {
             await handle.askQuestion.start(evt.id, evt.questions);
@@ -1019,6 +1039,21 @@ async function processAgentStream(
           }
         } else {
           log.warn('agent', 'ask-question-no-flow-bound', { toolUseId: evt.id });
+        }
+        // Treat the AskUserQuestion as a tool in-flight: claude is waiting
+        // on the user. Adding to the set pauses the idle watchdog so the
+        // user can take their time clicking. The matching `tool_result`
+        // (synthesised by claude after the keystroke) clears it.
+        inFlightTools.add(evt.id);
+        armOrPauseIdle();
+        // Finalize the streaming card now and start a fresh accumulator
+        // for the post-answer phase, so claude's reply after the click
+        // arrives as a *new* card via flushNewCard instead of being
+        // appended to the in-progress one.
+        if (flushNewCard && postAskState === undefined) {
+          state = { ...state, terminal: 'done' as const, footer: null };
+          await flush(state);
+          postAskState = initialState;
         }
         continue;
       }
@@ -1033,6 +1068,33 @@ async function processAgentStream(
           if (costUsd !== undefined) reportMetric('cost_usd', costUsd);
           if (inputTokens !== undefined) reportMetric('tokens_in', inputTokens);
           if (outputTokens !== undefined) reportMetric('tokens_out', outputTokens);
+        }
+        continue;
+      }
+
+      if (postAskState !== undefined) {
+        // Post-AskUserQuestion phase: claude's reply belongs to a new card.
+        // Accumulate into postAskState; the original streaming card stays
+        // at its frozen "normal" terminal. On terminal, render postAskState
+        // as a new card via flushNewCard. The streaming card never updates
+        // again.
+        const prev = postAskState;
+        postAskState = reduce(postAskState, evt);
+        if (postAskState.footer !== prev.footer || postAskState.terminal !== prev.terminal) {
+          log.info('card', 'post-ask-transition', {
+            footer: postAskState.footer,
+            terminal: postAskState.terminal,
+          });
+        }
+        if (postAskState.terminal !== 'running') {
+          if (flushNewCard) {
+            try {
+              await flushNewCard(postAskState);
+            } catch (err) {
+              log.fail('agent', err, { event: 'flush-new-card' });
+            }
+          }
+          break;
         }
         continue;
       }
