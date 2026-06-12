@@ -19,12 +19,73 @@ export interface AskUserQuestionItem {
   options: AskUserQuestionOption[];
 }
 
+export interface ToolInFlight {
+  id: string;
+  name: string;
+  /** Human-readable one-liner like "Bash · pnpm test:unit" or "Edit · src/foo.ts". */
+  label: string;
+  /** Wall-clock (ms epoch) when the tool_use was first seen in JSONL. */
+  startedAt: number;
+}
+
+export interface TodoItem {
+  content: string;
+  /** Verb form ("Writing tests"); falls back to `content` if absent. */
+  activeForm?: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
+export interface TodoSnapshot {
+  total: number;
+  completed: number;
+  /** Index of the first `in_progress` item, or null if none active. */
+  inProgressIdx: number | null;
+  items: TodoItem[];
+}
+
+export interface TurnSnapshot {
+  /** ms epoch when this turn started. */
+  turnStartedAt: number;
+  /** ms epoch when JSONL last produced new entries. */
+  lastEntryAt: number;
+  /** Total JSONL entries observed in this turn (for diagnostics). */
+  entriesSeen: number;
+  /** Tools whose `tool_use` was seen but no matching `tool_result` yet. */
+  inFlightTools: ToolInFlight[];
+  /** Most recent fully-completed tool (got its `tool_result`), or null. */
+  lastCompletedTool: ToolInFlight | null;
+  /** Tail of recent assistant text, last ~200 chars. */
+  lastTextTail: string;
+  /** Latest todo list from TaskCreate/TaskUpdate/TodoWrite; null if claude hasn't used the tool. */
+  todos: TodoSnapshot | null;
+  /** Running token totals for this turn. */
+  tokens: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+  };
+}
+
 export type AgentEvent =
   | { type: 'system'; sessionId?: string; threadId?: string; cwd?: string; model?: string }
   | { type: 'text'; delta: string }
   | { type: 'thinking'; delta: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; id: string; output: string; isError: boolean }
+  | {
+      /**
+       * Emitted by PtySession when the turn has been idle (no new JSONL entries)
+       * for a configured threshold. The turn is *not* terminated — consumers can
+       * surface this to the user (e.g. a Lark check-in card) and decide whether
+       * to wait or interrupt.
+       */
+      type: 'idle_checkpoint';
+      /** ms since the last JSONL entry. */
+      idleMs: number;
+      /** 1-based: 1st checkpoint at default threshold, 2nd at backoff, etc. */
+      checkpointNumber: number;
+      snapshot: TurnSnapshot;
+    }
   /**
    * Special-cased `tool_use` for claude's built-in `AskUserQuestion` tool.
    * Translators emit this *instead of* a regular `tool_use` so consumers

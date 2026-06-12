@@ -203,4 +203,128 @@ describe('JsonlTurnTranslator', () => {
     }
     expect(t.endTurnSeen).toBe(true);
   });
+
+  describe('snapshot', () => {
+    it('returns an empty baseline before any entry', () => {
+      const t = new JsonlTurnTranslator({ now: () => 1000 });
+      expect(t.snapshot()).toEqual({
+        inFlightTools: [],
+        lastCompletedTool: null,
+        lastTextTail: '',
+        todos: null,
+        entriesSeen: 0,
+        tokens: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 },
+      });
+    });
+
+    it('tracks tool_use → tool_result lifecycle with human label', () => {
+      let clock = 1000;
+      const t = new JsonlTurnTranslator({ now: () => clock });
+      const drain = (e: unknown) => { for (const _ of t.translate(e)) { /* drain */ } };
+
+      drain({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 't-bash', name: 'Bash', input: { command: 'pnpm test:unit' } },
+            { type: 'tool_use', id: 't-edit', name: 'Edit', input: { file_path: 'src/foo.ts' } },
+          ],
+        },
+      });
+      const mid = t.snapshot();
+      expect(mid.inFlightTools.map((x) => x.label)).toEqual([
+        'Bash · pnpm test:unit',
+        'Edit · src/foo.ts',
+      ]);
+      expect(mid.inFlightTools.every((x) => x.startedAt === 1000)).toBe(true);
+      expect(mid.lastCompletedTool).toBeNull();
+
+      clock = 1500;
+      drain({
+        type: 'user',
+        message: { content: [{ type: 'tool_result', tool_use_id: 't-bash', content: 'ok' }] },
+      });
+      const after = t.snapshot();
+      expect(after.inFlightTools.map((x) => x.id)).toEqual(['t-edit']);
+      expect(after.lastCompletedTool?.id).toBe('t-bash');
+      expect(after.lastCompletedTool?.label).toBe('Bash · pnpm test:unit');
+    });
+
+    it('parses TaskUpdate input into todo progress', () => {
+      const t = new JsonlTurnTranslator({ now: () => 0 });
+      for (const _ of t.translate({
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'tu-1',
+              name: 'TaskUpdate',
+              input: {
+                todos: [
+                  { content: 'A', status: 'completed' },
+                  { content: 'B', status: 'completed', activeForm: 'Doing B' },
+                  { content: 'C', status: 'in_progress', activeForm: 'Doing C' },
+                  { content: 'D', status: 'pending' },
+                  { content: 'E', status: 'pending' },
+                ],
+              },
+            },
+          ],
+        },
+      })) { /* drain */ }
+      const snap = t.snapshot();
+      expect(snap.todos).toEqual({
+        total: 5,
+        completed: 2,
+        inProgressIdx: 2,
+        items: [
+          { content: 'A', status: 'completed' },
+          { content: 'B', status: 'completed', activeForm: 'Doing B' },
+          { content: 'C', status: 'in_progress', activeForm: 'Doing C' },
+          { content: 'D', status: 'pending' },
+          { content: 'E', status: 'pending' },
+        ],
+      });
+    });
+
+    it('keeps text tail bounded to last ~200 chars and counts entries + tokens', () => {
+      const t = new JsonlTurnTranslator({ now: () => 0 });
+      const long = 'x'.repeat(500);
+      for (const _ of t.translate({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: long + 'TAIL' }],
+          usage: { input_tokens: 10, output_tokens: 7, cache_read_input_tokens: 3 },
+        },
+      })) { /* drain */ }
+      for (const _ of t.translate({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: '!' }] },
+      })) { /* drain */ }
+      const snap = t.snapshot();
+      expect(snap.lastTextTail.length).toBeLessThanOrEqual(200);
+      expect(snap.lastTextTail.endsWith('TAIL!')).toBe(true);
+      expect(snap.entriesSeen).toBe(2);
+      expect(snap.tokens).toEqual({ inputTokens: 13, outputTokens: 7, cachedInputTokens: 3 });
+    });
+
+    it('Agent tool label falls back to prompt when description is absent', () => {
+      const t = new JsonlTurnTranslator({ now: () => 0 });
+      for (const _ of t.translate({
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'ag',
+              name: 'Agent',
+              input: { prompt: 'investigate the timeout bug in pty-session and report back' },
+            },
+          ],
+        },
+      })) { /* drain */ }
+      expect(t.snapshot().inFlightTools[0]?.label.startsWith('Agent · investigate')).toBe(true);
+    });
+  });
 });

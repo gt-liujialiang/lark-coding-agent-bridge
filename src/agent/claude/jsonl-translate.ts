@@ -1,4 +1,96 @@
-import type { AgentEvent, AskUserQuestionItem } from '../types';
+import type {
+  AgentEvent,
+  AskUserQuestionItem,
+  TodoItem,
+  TodoSnapshot,
+  ToolInFlight,
+} from '../types';
+
+export interface TranslatorSnapshot {
+  inFlightTools: ToolInFlight[];
+  lastCompletedTool: ToolInFlight | null;
+  lastTextTail: string;
+  todos: TodoSnapshot | null;
+  entriesSeen: number;
+  tokens: { inputTokens: number; outputTokens: number; cachedInputTokens: number };
+}
+
+const TEXT_TAIL_MAX = 200;
+
+function truncate(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n - 1) + '…';
+}
+
+function humanLabel(name: string, input: unknown): string {
+  if (!input || typeof input !== 'object') return name;
+  const inp = input as Record<string, unknown>;
+  const str = (k: string): string => (typeof inp[k] === 'string' ? (inp[k] as string) : '');
+  switch (name) {
+    case 'Bash':
+      return `Bash · ${truncate(str('command'), 80)}`;
+    case 'Edit':
+    case 'Write':
+      return `${name} · ${str('file_path')}`;
+    case 'Read': {
+      const p = str('file_path');
+      const off = typeof inp.offset === 'number' ? `:${inp.offset}` : '';
+      return `Read · ${p}${off}`;
+    }
+    case 'Grep': {
+      const pat = truncate(str('pattern'), 40);
+      const path = str('path');
+      return `Grep · ${pat}${path ? ` in ${path}` : ''}`;
+    }
+    case 'Glob':
+      return `Glob · ${str('pattern')}`;
+    case 'Agent': {
+      const desc = str('description') || str('prompt');
+      return `Agent · ${truncate(desc, 60)}`;
+    }
+    case 'WebFetch':
+      return `WebFetch · ${str('url')}`;
+    case 'WebSearch':
+      return `WebSearch · ${truncate(str('query'), 60)}`;
+    case 'TaskCreate':
+    case 'TaskUpdate':
+    case 'TodoWrite':
+      return name; // todo list itself surfaced via TurnSnapshot.todos
+    default:
+      return name;
+  }
+}
+
+function parseTodos(input: unknown): TodoSnapshot | null {
+  if (!input || typeof input !== 'object') return null;
+  const raw = (input as { todos?: unknown }).todos;
+  if (!Array.isArray(raw)) return null;
+  const items: TodoItem[] = [];
+  let inProgressIdx: number | null = null;
+  let completed = 0;
+  for (const it of raw) {
+    if (!it || typeof it !== 'object') continue;
+    const obj = it as Record<string, unknown>;
+    const content = typeof obj.content === 'string' ? obj.content : '';
+    const status = obj.status;
+    if (
+      !content ||
+      (status !== 'pending' && status !== 'in_progress' && status !== 'completed')
+    ) {
+      continue;
+    }
+    if (status === 'in_progress' && inProgressIdx === null) inProgressIdx = items.length;
+    if (status === 'completed') completed++;
+    items.push({
+      content,
+      ...(typeof obj.activeForm === 'string' && obj.activeForm
+        ? { activeForm: obj.activeForm }
+        : {}),
+      status,
+    });
+  }
+  if (items.length === 0) return null;
+  return { total: items.length, completed, inProgressIdx, items };
+}
 
 interface ContentBlock {
   type?: string;
@@ -60,13 +152,43 @@ export class JsonlTurnTranslator {
   private outputTokens = 0;
   private cachedInputTokens = 0;
   private _endTurnSeen = false;
+  private currentTools = new Map<string, ToolInFlight>();
+  private lastCompletedTool: ToolInFlight | null = null;
+  private lastTextTail = '';
+  private todos: TodoSnapshot | null = null;
+  private entriesSeen = 0;
+  private readonly now: () => number;
+
+  constructor(opts?: { now?: () => number }) {
+    this.now = opts?.now ?? Date.now;
+  }
 
   get endTurnSeen(): boolean {
     return this._endTurnSeen;
   }
 
+  snapshot(): TranslatorSnapshot {
+    return {
+      inFlightTools: [...this.currentTools.values()],
+      lastCompletedTool: this.lastCompletedTool,
+      lastTextTail: this.lastTextTail,
+      todos: this.todos,
+      entriesSeen: this.entriesSeen,
+      tokens: {
+        inputTokens: this.inputTokens,
+        outputTokens: this.outputTokens,
+        cachedInputTokens: this.cachedInputTokens,
+      },
+    };
+  }
+
+  private appendText(delta: string): void {
+    this.lastTextTail = (this.lastTextTail + delta).slice(-TEXT_TAIL_MAX);
+  }
+
   *translate(raw: unknown): Generator<AgentEvent> {
     if (!raw || typeof raw !== 'object') return;
+    this.entriesSeen += 1;
     const entry = raw as JsonlEntry;
     if (entry.type === 'assistant') {
       const message = entry.message as AssistantMessage | undefined;
@@ -84,10 +206,30 @@ export class JsonlTurnTranslator {
       }
       for (const block of message?.content ?? []) {
         if (block.type === 'text' && typeof block.text === 'string' && block.text) {
+          this.appendText(block.text);
           yield { type: 'text', delta: block.text };
         } else if (block.type === 'thinking' && typeof block.thinking === 'string' && block.thinking) {
           yield { type: 'thinking', delta: block.thinking };
         } else if (block.type === 'tool_use' && block.id && block.name) {
+          // Track every tool_use (including AskUserQuestion) for snapshot purposes.
+          const inFlight: ToolInFlight = {
+            id: block.id,
+            name: block.name,
+            label: humanLabel(block.name, block.input),
+            startedAt: this.now(),
+          };
+          this.currentTools.set(block.id, inFlight);
+          // Tool inputs that carry semantic progress (todo lists) update derived
+          // snapshot fields immediately — the bridge doesn't have to wait for
+          // tool_result to surface them.
+          if (
+            block.name === 'TaskCreate' ||
+            block.name === 'TaskUpdate' ||
+            block.name === 'TodoWrite'
+          ) {
+            const parsed = parseTodos(block.input);
+            if (parsed) this.todos = parsed;
+          }
           if (block.name === 'AskUserQuestion') {
             // Special-case claude's built-in AskUserQuestion. Don't emit it
             // as a generic tool_use (the bot can't show a useful panel for a
@@ -115,6 +257,11 @@ export class JsonlTurnTranslator {
       const message = entry.message as UserMessage | undefined;
       for (const block of message?.content ?? []) {
         if (block.type === 'tool_result' && block.tool_use_id) {
+          const completed = this.currentTools.get(block.tool_use_id);
+          if (completed) {
+            this.currentTools.delete(block.tool_use_id);
+            this.lastCompletedTool = completed;
+          }
           const output =
             typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
           yield {
