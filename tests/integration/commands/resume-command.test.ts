@@ -294,6 +294,82 @@ describe('agent-aware resume commands', () => {
     expect(nonces).not.toContain('sess-terminal-b');
   });
 
+  it('/resume all groups sessions by directory in collapsible panels, first group expanded', async () => {
+    const h = await createHarness('claude');
+    // Two cwds, three sessions total. Most recent (proj-a) should be first
+    // panel and start expanded; proj-b panel comes after and starts collapsed.
+    h.claudeAllHistory.push(
+      {
+        sessionId: 'a1',
+        mtime: 1_700_000_500_000,
+        preview: 'A first',
+        lineCount: 10,
+        cwd: '/Users/me/proj-a',
+        cwdLabel: '~/proj-a',
+      },
+      {
+        sessionId: 'a2',
+        mtime: 1_700_000_400_000,
+        preview: 'A second',
+        lineCount: 20,
+        cwd: '/Users/me/proj-a',
+        cwdLabel: '~/proj-a',
+      },
+      {
+        sessionId: 'b1',
+        mtime: 1_700_000_300_000,
+        preview: 'B only',
+        lineCount: 30,
+        cwd: '/Users/me/proj-b',
+        cwdLabel: '~/proj-b',
+      },
+    );
+
+    await expect(h.run('/resume all')).resolves.toBe(true);
+    const card = (lastContent(h.channel) as { card: { elements: object[] } }).card;
+    const panels = card.elements.filter(
+      (el) => (el as { tag?: string }).tag === 'collapsible_panel',
+    ) as Array<{ expanded: boolean; header: { title: { content: string } }; elements: object[] }>;
+
+    expect(panels).toHaveLength(2);
+    expect(panels[0]!.header.title.content).toContain('~/proj-a');
+    expect(panels[0]!.header.title.content).toContain('2 条');
+    expect(panels[0]!.expanded).toBe(true);
+    expect(panels[1]!.header.title.content).toContain('~/proj-b');
+    expect(panels[1]!.header.title.content).toContain('1 条');
+    expect(panels[1]!.expanded).toBe(false);
+
+    // Both A entries live inside the first panel — verify by looking for
+    // their previews in the panel's elements rather than the card root.
+    const groupAText = JSON.stringify(panels[0]!.elements);
+    expect(groupAText).toContain('A first');
+    expect(groupAText).toContain('A second');
+    expect(groupAText).not.toContain('B only');
+  });
+
+  it('/resume all falls back to a flat list when every result is under the same cwd', async () => {
+    const h = await createHarness('claude');
+    h.claudeAllHistory.push(
+      {
+        sessionId: 'only-a',
+        mtime: 1_700_000_500_000,
+        preview: 'A only',
+        lineCount: 10,
+        cwd: '/Users/me/proj-a',
+        cwdLabel: '~/proj-a',
+      },
+    );
+
+    await expect(h.run('/resume all')).resolves.toBe(true);
+    const card = (lastContent(h.channel) as { card: { elements: object[] } }).card;
+    const panels = card.elements.filter(
+      (el) => (el as { tag?: string }).tag === 'collapsible_panel',
+    );
+    expect(panels).toHaveLength(0);
+    // Cwd still visible — falls through to the flat per-entry cwd line.
+    expect(JSON.stringify(card)).toContain('~/proj-a');
+  });
+
   it('/resume use <cross-cwd-nonce> switches the chat workspace cwd and binds the resumed session', async () => {
     const h = await createHarness('claude');
     const terminalCwd = '/Users/me/elsewhere';

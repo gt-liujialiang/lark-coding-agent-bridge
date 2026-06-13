@@ -157,29 +157,86 @@ export function resumeCard(cwd: string, entries: ResumeEntry[]): object {
   }
 
   elements.push(HR);
-  entries.forEach((e, i) => {
-    const marker = e.current ? '  ← 当前' : '';
-    const detail = e.detail ?? `${e.lineCount ?? 0} 条`;
-    const displayId = e.displayId ?? e.sessionId;
-    const cwdLine = e.cwdLabel ? `\n📂 \`${escapeCode(e.cwdLabel)}\`` : '';
-    elements.push(
-      divMd(
-        `**${i + 1}.** ${escapeMd(e.preview)}${marker}\n\`${displayId.slice(0, 8)}…\` · ${e.relTime} · ${escapeMd(detail)}${cwdLine}`,
-      ),
-    );
-    elements.push(
-      actions([
-        {
-          text: e.current ? '已是当前会话' : '▸ 恢复此会话',
-          value: { cmd: 'resume.use', arg: e.sessionId },
-          style: e.current ? 'default' : 'primary',
-        },
-      ]),
-    );
-    if (i < entries.length - 1) elements.push(HR);
-  });
+
+  if (isAllCwds && countDistinctCwdLabels(entries) > 1) {
+    // Group by directory in collapsible panels. Insertion order is preserved
+    // (entries arrive sorted globally by mtime, so the most-recently-touched
+    // project's panel comes first). First panel is expanded; the rest start
+    // collapsed to keep the card compact when the user has many projects.
+    const groupOrder: string[] = [];
+    const groups = new Map<string, ResumeEntry[]>();
+    for (const e of entries) {
+      const label = e.cwdLabel ?? '(unknown)';
+      if (!groups.has(label)) {
+        groupOrder.push(label);
+        groups.set(label, []);
+      }
+      groups.get(label)!.push(e);
+    }
+    groupOrder.forEach((label, gi) => {
+      elements.push(buildCwdGroupPanel(label, groups.get(label)!, gi === 0));
+    });
+  } else {
+    entries.forEach((e, i) => {
+      elements.push(...renderResumeEntry(e, i + 1, { showCwd: isAllCwds }));
+      if (i < entries.length - 1) elements.push(HR);
+    });
+  }
 
   return shell('🔁 恢复历史会话', elements);
+}
+
+function countDistinctCwdLabels(entries: ResumeEntry[]): number {
+  const seen = new Set<string>();
+  for (const e of entries) seen.add(e.cwdLabel ?? '');
+  return seen.size;
+}
+
+function buildCwdGroupPanel(label: string, items: ResumeEntry[], expanded: boolean): object {
+  const inner: object[] = [];
+  items.forEach((e, i) => {
+    // Within a panel the cwd is in the panel header, so suppress per-entry cwd.
+    inner.push(...renderResumeEntry(e, i + 1, { showCwd: false }));
+    if (i < items.length - 1) inner.push(HR);
+  });
+  return {
+    tag: 'collapsible_panel',
+    expanded,
+    header: {
+      title: { tag: 'markdown', content: `**📂 \`${escapeCode(label)}\`** · ${items.length} 条` },
+      vertical_align: 'center',
+      icon: { tag: 'standard_icon', token: 'down-small-ccm_outlined', size: '16px 16px' },
+      icon_position: 'follow_text',
+      icon_expanded_angle: -180,
+    },
+    border: { color: 'grey', corner_radius: '5px' },
+    vertical_spacing: '8px',
+    padding: '8px 8px 8px 8px',
+    elements: inner,
+  };
+}
+
+function renderResumeEntry(
+  e: ResumeEntry,
+  ordinal: number,
+  opts: { showCwd: boolean },
+): object[] {
+  const marker = e.current ? '  ← 当前' : '';
+  const detail = e.detail ?? `${e.lineCount ?? 0} 条`;
+  const displayId = e.displayId ?? e.sessionId;
+  const cwdLine = opts.showCwd && e.cwdLabel ? `\n📂 \`${escapeCode(e.cwdLabel)}\`` : '';
+  return [
+    divMd(
+      `**${ordinal}.** ${escapeMd(e.preview)}${marker}\n\`${displayId.slice(0, 8)}…\` · ${e.relTime} · ${escapeMd(detail)}${cwdLine}`,
+    ),
+    actions([
+      {
+        text: e.current ? '已是当前会话' : '▸ 恢复此会话',
+        value: { cmd: 'resume.use', arg: e.sessionId },
+        style: e.current ? 'default' : 'primary',
+      },
+    ]),
+  ];
 }
 
 export function helpCard(agentName = 'Agent'): object {
