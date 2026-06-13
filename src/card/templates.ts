@@ -134,15 +134,25 @@ export interface ResumeEntry {
   lineCount?: number;
   detail?: string;
   current?: boolean;
+  /**
+   * Per-entry working directory label. When set, the card replaces its single
+   * header (`当前 cwd: ...`) with a multi-cwd hint and shows this label on
+   * each entry — used by `/resume all` to surface terminal sessions across
+   * arbitrary cwds.
+   */
+  cwdLabel?: string;
 }
 
 export function resumeCard(cwd: string, entries: ResumeEntry[]): object {
   const elements: object[] = [];
-  elements.push(divMd(`当前 cwd：\`${escapeCode(cwd)}\``));
+  const isAllCwds = cwd === '(all)';
+  elements.push(
+    divMd(isAllCwds ? '扫描了 `~/.claude/projects/` 全部目录' : `当前 cwd：\`${escapeCode(cwd)}\``),
+  );
 
   if (entries.length === 0) {
     elements.push(HR);
-    elements.push(divMd('此 cwd 下没有历史会话。'));
+    elements.push(divMd(isAllCwds ? '没有找到任何 claude 会话历史。' : '此 cwd 下没有历史会话。'));
     return shell('🔁 恢复历史会话', elements);
   }
 
@@ -151,9 +161,10 @@ export function resumeCard(cwd: string, entries: ResumeEntry[]): object {
     const marker = e.current ? '  ← 当前' : '';
     const detail = e.detail ?? `${e.lineCount ?? 0} 条`;
     const displayId = e.displayId ?? e.sessionId;
+    const cwdLine = e.cwdLabel ? `\n📂 \`${escapeCode(e.cwdLabel)}\`` : '';
     elements.push(
       divMd(
-        `**${i + 1}.** ${escapeMd(e.preview)}${marker}\n\`${displayId.slice(0, 8)}…\` · ${e.relTime} · ${escapeMd(detail)}`,
+        `**${i + 1}.** ${escapeMd(e.preview)}${marker}\n\`${displayId.slice(0, 8)}…\` · ${e.relTime} · ${escapeMd(detail)}${cwdLine}`,
       ),
     );
     elements.push(

@@ -51,7 +51,13 @@ import {
   reduce,
   type RunState,
 } from '../card/run-state';
-import { formatRelTime, listRecentSessions, type SessionSummary } from '../session/history';
+import {
+  formatRelTime,
+  listAllRecentSessions,
+  listRecentSessions,
+  type GlobalSessionSummary,
+  type SessionSummary,
+} from '../session/history';
 import {
   listCodexThreadHistory,
   type CodexThreadHistoryEntry,
@@ -123,6 +129,9 @@ export interface CommandContext {
     options: ListCodexThreadHistoryOptions,
   ) => Promise<CodexThreadHistoryEntry[]>;
   claudeHistoryProvider?: (cwd: string, limit: number) => Promise<SessionSummary[]>;
+  /** Global scan provider for `/resume all`. Injected for tests; defaults to
+   * `listAllRecentSessions` which scans `~/.claude/projects/*\/*.jsonl`. */
+  claudeAllHistoryProvider?: (limit: number) => Promise<GlobalSessionSummary[]>;
   /** Set when invoked from a CardKit 2.0 form submit. Keys are input `name`s. */
   formValue?: Record<string, unknown>;
   /** True when this invocation came from a card button click rather than a
@@ -136,10 +145,19 @@ type Handler = (args: string, ctx: CommandContext) => Promise<void>;
 interface ResumeCandidate {
   scopeId: string;
   agentId: 'claude' | 'codex';
+  /**
+   * For same-cwd candidates: must match the consumer's identity cwd.
+   * For cross-cwd candidates (issued by `/resume all`): the *target* cwd the
+   * chat should be switched to before applying. `consumeResumeCandidate`
+   * skips the cwd match in this case and `applyResume` updates the workspace.
+   */
   cwdRealpath: string;
   policyFingerprint: string;
   sessionId?: string;
   threadId?: string;
+  /** When true, accept consumes whose identity cwd differs and treat
+   * `cwdRealpath` as the new target cwd to bind. */
+  crossCwd?: boolean;
   expiresAt: number;
 }
 
@@ -540,6 +558,12 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
     return applyResume(rest, ctx);
   }
 
+  if (sub === 'all') {
+    const n = Number.parseInt(rest, 10);
+    const limit = Number.isFinite(n) && n > 0 && n <= 30 ? n : 10;
+    return handleResumeAll(ctx, limit);
+  }
+
   // Default: list recent sessions
   const n = Number.parseInt(sub, 10);
   const limit = Number.isFinite(n) && n > 0 && n <= 20 ? n : 5;
@@ -633,25 +657,52 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
     const entry = ctx.sessionCatalog.activeFor(ctx.sessionCatalogIdentity);
     const resolved = consumeResumeCandidate(sessionId, ctx.sessionCatalogIdentity);
     if (resolved) {
+      // Cross-cwd resume: candidate targets a different cwd (terminal session
+      // picked from `/resume all`). Repoint the chat's workspace to that cwd
+      // before binding the session, so subsequent turns spawn claude with the
+      // correct --resume + cwd combo.
+      const targetCwd = resolved.crossCwd ? resolved.cwdRealpath : ctx.sessionCatalogIdentity.cwdRealpath;
+      if (resolved.crossCwd) {
+        ctx.workspaces.setCwd(ctx.scope, targetCwd);
+        log.info('command', 'resume-crosscwd', {
+          scope: ctx.scope,
+          fromCwd: ctx.sessionCatalogIdentity.cwdRealpath,
+          toCwd: targetCwd,
+          sessionId: resolved.sessionId,
+        });
+      }
       ctx.activeRuns.interrupt(ctx.scope);
       if (ctx.sessionCatalogIdentity.agentId === 'codex') {
-        ctx.sessionCatalog.upsertActive({
-          scopeId: ctx.sessionCatalogIdentity.scopeId,
-          agentId: 'codex',
-          cwdRealpath: ctx.sessionCatalogIdentity.cwdRealpath,
-          policyFingerprint: ctx.sessionCatalogIdentity.policyFingerprint,
-          threadId: resolved.threadId!,
-        });
+        // Skip catalog upsert when cross-cwd: the cached identity's policy
+        // fingerprint is for the *old* cwd, so an upsert keyed by it would be
+        // a dead record never matched by future identity lookups at the new
+        // cwd. Codex doesn't have a SessionStore fallback, so cross-cwd
+        // resume isn't currently meaningful for Codex anyway — this branch
+        // only fires for `/resume all` which we gate to claude.
+        if (!resolved.crossCwd) {
+          ctx.sessionCatalog.upsertActive({
+            scopeId: ctx.sessionCatalogIdentity.scopeId,
+            agentId: 'codex',
+            cwdRealpath: targetCwd,
+            policyFingerprint: ctx.sessionCatalogIdentity.policyFingerprint,
+            threadId: resolved.threadId!,
+          });
+        }
       } else {
-        ctx.sessionCatalog.upsertActive({
-          scopeId: ctx.sessionCatalogIdentity.scopeId,
-          agentId: 'claude',
-          cwdRealpath: ctx.sessionCatalogIdentity.cwdRealpath,
-          policyFingerprint: ctx.sessionCatalogIdentity.policyFingerprint,
-          sessionId: resolved.sessionId!,
-        });
+        if (!resolved.crossCwd) {
+          ctx.sessionCatalog.upsertActive({
+            scopeId: ctx.sessionCatalogIdentity.scopeId,
+            agentId: 'claude',
+            cwdRealpath: targetCwd,
+            policyFingerprint: ctx.sessionCatalogIdentity.policyFingerprint,
+            sessionId: resolved.sessionId!,
+          });
+        }
         await releasePrevIfDifferent(resolved.sessionId!);
-        ctx.sessions.set(ctx.scope, resolved.sessionId!, ctx.sessionCatalogIdentity.cwdRealpath);
+        // SessionStore is the authoritative fallback for the bridge's
+        // run-flow.ts `resumeFor(scope, cwd)` lookup — that's what binds the
+        // resumed session id to the next turn at `targetCwd`.
+        ctx.sessions.set(ctx.scope, resolved.sessionId!, targetCwd);
       }
       await reply(ctx, RESUME_APPLIED_REPLY);
       return;
@@ -692,17 +743,24 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
 
 function issueResumeCandidate(
   identity: SessionCatalogIdentity,
-  target: { sessionId: string } | { threadId: string },
+  target:
+    | { sessionId: string; cwdOverride?: string }
+    | { threadId: string },
 ): string {
   pruneResumeCandidates();
   let nonce = randomUUID().slice(0, 12);
   while (resumeCandidates.has(nonce)) nonce = randomUUID().slice(0, 12);
+  const cwdOverride =
+    'sessionId' in target && target.cwdOverride && target.cwdOverride !== identity.cwdRealpath
+      ? target.cwdOverride
+      : undefined;
   resumeCandidates.set(nonce, {
     scopeId: identity.scopeId,
     agentId: identity.agentId,
-    cwdRealpath: identity.cwdRealpath,
+    cwdRealpath: cwdOverride ?? identity.cwdRealpath,
     policyFingerprint: identity.policyFingerprint,
-    ...target,
+    ...('sessionId' in target ? { sessionId: target.sessionId } : { threadId: target.threadId }),
+    ...(cwdOverride ? { crossCwd: true } : {}),
     expiresAt: Date.now() + RESUME_CANDIDATE_TTL_MS,
   });
   return nonce;
@@ -719,11 +777,15 @@ function consumeResumeCandidate(
   if (
     candidate.scopeId !== identity.scopeId ||
     candidate.agentId !== identity.agentId ||
-    candidate.cwdRealpath !== identity.cwdRealpath ||
     candidate.policyFingerprint !== identity.policyFingerprint ||
     (identity.agentId === 'claude' && !candidate.sessionId) ||
     (identity.agentId === 'codex' && !candidate.threadId)
   ) {
+    return undefined;
+  }
+  // cwd match is required for same-cwd candidates; cross-cwd candidates carry
+  // the *target* cwd and intentionally differ from the consumer's identity.
+  if (!candidate.crossCwd && candidate.cwdRealpath !== identity.cwdRealpath) {
     return undefined;
   }
   return candidate;
@@ -742,6 +804,54 @@ async function listClaudeResumeHistory(
 ): Promise<SessionSummary[]> {
   const provider = ctx.claudeHistoryProvider ?? listRecentSessions;
   return provider(cwd, limit);
+}
+
+async function listClaudeAllResumeHistory(
+  ctx: CommandContext,
+  limit: number,
+): Promise<GlobalSessionSummary[]> {
+  const provider = ctx.claudeAllHistoryProvider ?? listAllRecentSessions;
+  return provider(limit);
+}
+
+/**
+ * `/resume all [N]` — list the N most recent claude sessions across *every*
+ * `~/.claude/projects/<encoded-cwd>/` directory on this machine, so a user
+ * can resume a terminal session that was started in a cwd different from the
+ * Lark chat's current binding. Picking an entry switches the chat's workspace
+ * cwd to that session's cwd as a side effect (via the `crossCwd` candidate
+ * flag — see `applyResume`).
+ */
+async function handleResumeAll(ctx: CommandContext, limit: number): Promise<void> {
+  if (ctx.chatMode !== 'p2p') {
+    await reply(ctx, '群聊中不展示历史会话详情。请私聊 bot 使用 `/resume all` 查看跨目录会话。');
+    return;
+  }
+  if (ctx.controls.profileConfig.agentKind !== 'claude') {
+    await reply(ctx, '`/resume all` 暂时只支持 Claude profile。');
+    return;
+  }
+  const identity = ctx.sessionCatalogIdentity;
+  if (!identity) {
+    await reply(ctx, '当前上下文无法发起跨目录恢复，请先用 `/cd <path>` 选定一个工作目录。');
+    return;
+  }
+  const sessions = await listClaudeAllResumeHistory(ctx, limit);
+  const currentSession = ctx.sessions.getRaw(ctx.scope);
+  const entries = sessions.map((s) => ({
+    sessionId: issueResumeCandidate(identity, {
+      sessionId: s.sessionId,
+      cwdOverride: s.cwd || identity.cwdRealpath,
+    }),
+    displayId: s.sessionId,
+    preview: s.preview,
+    relTime: formatRelTime(s.mtime),
+    lineCount: s.lineCount,
+    cwdLabel: s.cwdLabel,
+    current: s.sessionId === currentSession?.sessionId,
+  }));
+  const card = resumeCard('(all)', entries);
+  await ctx.channel.send(ctx.msg.chatId, { card }, { replyTo: ctx.msg.messageId });
 }
 
 async function listCodexResumeHistory(
