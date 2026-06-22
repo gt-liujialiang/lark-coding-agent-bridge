@@ -1022,6 +1022,14 @@ async function processAgentStream(
   let idleFired = false;
   let timer: NodeJS.Timeout | undefined;
   const inFlightTools = new Set<string>();
+  // Subset of `inFlightTools` that are `ask_user_question` tool_use_ids.
+  // While non-empty, claude is intentionally waiting for the user to click
+  // an option on a Lark interactive card; surfacing the idle-checkpoint
+  // check-in card here would push that card down in the chat and confuse
+  // the user. Suppress check-in dispatch (and keep the watchdog state
+  // untouched) while this set is non-empty. Cleared by the matching
+  // `tool_result` synthesized after the user's click.
+  const pendingAskQuestions = new Set<string>();
   // Flipped on the first `idle_checkpoint` event of this turn: the user has
   // been (or is about to be) prompted via the check-in card, so the bridge
   // shouldn't unilaterally kill the run anymore. From here on, termination
@@ -1059,6 +1067,7 @@ async function processAgentStream(
         });
       } else if (evt.type === 'tool_result') {
         inFlightTools.delete(evt.id);
+        pendingAskQuestions.delete(evt.id);
         log.info('agent', 'tool-done', { inFlight: inFlightTools.size });
       }
       armOrPauseIdle();
@@ -1081,7 +1090,10 @@ async function processAgentStream(
         // on the user. Adding to the set pauses the idle watchdog so the
         // user can take their time clicking. The matching `tool_result`
         // (synthesised by claude after the keystroke) clears it.
+        // Also track in `pendingAskQuestions` so the idle-checkpoint handler
+        // knows to stay silent while a click is outstanding.
         inFlightTools.add(evt.id);
+        pendingAskQuestions.add(evt.id);
         armOrPauseIdle();
         // Finalize the streaming card now and start a fresh accumulator
         // for the post-answer phase, so claude's reply after the click
@@ -1099,6 +1111,24 @@ async function processAgentStream(
         // mutate the streaming card — the check-in card goes out as its own
         // new message. From now on the channel watchdog stays off for the
         // remainder of this turn (see `watchdogDisabled` declaration).
+        //
+        // Exception: when an `AskUserQuestion` card is awaiting the user's
+        // click, claude is deliberately silent and a check-in card here
+        // would only bury the question card in chat history. Stay silent
+        // and leave the watchdog state untouched — when the user finally
+        // clicks, claude resumes, the PtySession resets cadence on the next
+        // JSONL entry, and check-ins behave normally again.
+        const suppressedForAq = pendingAskQuestions.size > 0;
+        log.info('agent', 'idle-checkpoint', {
+          scope,
+          checkpointNumber: evt.checkpointNumber,
+          idleMs: evt.idleMs,
+          inFlight: evt.snapshot.inFlightTools.map((t) => t.name),
+          ...(suppressedForAq ? { suppressed: 'pending-ask-user-question' } : {}),
+        });
+        if (suppressedForAq) {
+          continue;
+        }
         if (!watchdogDisabled) {
           watchdogDisabled = true;
           if (timer) {
@@ -1106,12 +1136,6 @@ async function processAgentStream(
             timer = undefined;
           }
         }
-        log.info('agent', 'idle-checkpoint', {
-          scope,
-          checkpointNumber: evt.checkpointNumber,
-          idleMs: evt.idleMs,
-          inFlight: evt.snapshot.inFlightTools.map((t) => t.name),
-        });
         if (onIdleCheckpoint) {
           try {
             await onIdleCheckpoint(evt);
