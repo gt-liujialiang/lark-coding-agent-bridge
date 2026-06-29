@@ -149,6 +149,46 @@ describe('run policy', () => {
     });
   });
 
+  it('forces bypassPermissions for p2p claude runs by default', () => {
+    const result = evaluateRunPolicy(
+      baseInput({
+        chatMode: 'p2p',
+        profileConfig: profile({
+          permissions: { defaultAccess: 'workspace', maxAccess: 'workspace' },
+        }),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.permissionMode).toBe('bypassPermissions');
+  });
+
+  it('does not force bypass in group chats', () => {
+    const result = evaluateRunPolicy(
+      baseInput({
+        chatMode: 'group',
+        profileConfig: profile({
+          permissions: { defaultAccess: 'workspace', maxAccess: 'workspace' },
+        }),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.permissionMode).toBe('acceptEdits');
+  });
+
+  it('does not force bypass when the p2p toggle is off', () => {
+    const result = evaluateRunPolicy(
+      baseInput({
+        chatMode: 'p2p',
+        claudeP2pAutoApprove: false,
+        profileConfig: profile({
+          permissions: { defaultAccess: 'workspace', maxAccess: 'workspace' },
+        }),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.permissionMode).toBe('acceptEdits');
+  });
+
   it('is pure policy calculation and does not import IO or API clients', () => {
     const source = readFileSync(join(process.cwd(), 'src/policy/run-policy.ts'), 'utf8');
 

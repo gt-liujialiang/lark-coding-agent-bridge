@@ -55,6 +55,12 @@ export interface RunPolicyInput {
   codexHome?: string;
   inheritCodexHome?: boolean;
   ttlMs?: number;
+  /** Chat mode of the originating conversation. Used to scope p2p-only
+   * permission behavior. Absent for non-chat callers (treated as non-p2p). */
+  chatMode?: 'p2p' | 'group' | 'topic';
+  /** When not `false`, p2p claude runs are forced to `bypassPermissions`
+   * (the `claudeP2pAutoApprove` preference). Defaults to on. */
+  claudeP2pAutoApprove?: boolean;
 }
 
 export interface RunPolicyAllow {
@@ -110,10 +116,21 @@ export function evaluateRunPolicy(input: RunPolicyInput): RunPolicyResult {
     input.capability.permissions.maxAccess,
   );
   const sandbox = accessToCodexSandbox(accessMode);
-  const permissionMode = accessToClaudePermissionMode(
+  let permissionMode = accessToClaudePermissionMode(
     accessMode,
     input.profileConfig.permissions,
   );
+  // p2p auto-approve: a private chat is just the owner, so per-tool prompts are
+  // pure friction. Force claude into bypassPermissions there (default on).
+  // Groups/topics keep the tier-resolved mode. Codex has no permissionMode
+  // concept, so this is gated on the claude capability.
+  if (
+    input.capability.agentId === 'claude' &&
+    input.chatMode === 'p2p' &&
+    input.claudeP2pAutoApprove !== false
+  ) {
+    permissionMode = 'bypassPermissions';
+  }
   const resourceDigest = resourceScopeDigest({
     source: input.scope.source,
     chatId: input.scope.chatId,
