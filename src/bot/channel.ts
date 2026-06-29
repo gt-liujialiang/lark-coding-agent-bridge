@@ -32,6 +32,7 @@ import { tryHandleCommand, type Controls } from '../commands';
 import type { AppConfig } from '../config/schema';
 import {
   getAgentStopGraceMs,
+  getClaudeP2pAutoApprove,
   getMaxConcurrentRuns,
   getMessageReplyMode,
   getRequireMentionInGroup,
@@ -710,6 +711,8 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     workspaces,
     executor,
     now: Date.now(),
+    chatMode: mode,
+    claudeP2pAutoApprove: getClaudeP2pAutoApprove(controls.cfg),
     stopGraceMs: getAgentStopGraceMs(controls.cfg),
     observability: {
       profile: controls.profile,
