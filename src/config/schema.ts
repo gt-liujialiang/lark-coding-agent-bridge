@@ -68,6 +68,9 @@ export interface SecretsConfig {
  */
 export type MessageReplyMode = 'card' | 'markdown' | 'text';
 
+/** Tool-call rendering mode. See `AppPreferences.toolCallDisplay`. */
+export type ToolCallDisplay = 'full' | 'compact' | 'hide';
+
 /**
  * Access control settings. Empty lists are fail-closed in the v2 policy:
  * no DM senders, no group chats, and only the runtime owner can administer
@@ -99,10 +102,31 @@ export interface AppPreferences {
   messageReplyMigrated?: boolean;
   /**
    * Whether to render tool-call blocks (Bash / Read / Edit / ...) in the
-   * output. Default true. Turn off if you only care about Claude's final
-   * text answer and want to hide the "工具调用过程".
+   * output. Legacy boolean — superseded by `toolCallDisplay`. Kept so
+   * upgrades from pre-tri-state configs keep working; `getToolCallDisplay`
+   * coerces `false` → `'hide'` when `toolCallDisplay` is unset (a legacy
+   * `true` falls through to the `'compact'` default).
    */
   showToolCalls?: boolean;
+  /**
+   * How tool-call blocks render in the card. Tri-state:
+   *   - `full`     : header + collapsible body (input args + truncated output)
+   *   - `compact`  : header-only one-liners (icon + tool name + short summary)
+   *   - `hide`     : skip tool blocks entirely
+   *
+   * Default `compact` — uniform header-only one-liners. `full` adds the
+   * collapsible input/output bodies (handy in p2p where noise is fine, but
+   * its per-group folding looks inconsistent across turns). `hide` keeps the
+   * card empty during long tool sequences — only use when the user truly
+   * only cares about the final answer.
+   */
+  toolCallDisplay?: ToolCallDisplay;
+  /**
+   * Optional override for group / topic chats. When unset, falls back to
+   * `toolCallDisplay`. Lets users e.g. keep `full` in p2p (where noise is
+   * acceptable) while picking `compact` for groups (where it isn't).
+   */
+  toolCallDisplayInGroups?: ToolCallDisplay;
   /**
    * Cap on concurrent claude runs across all chats / topics. Excess runs
    * queue FIFO. Default 10. Mostly relevant for topic groups where each
@@ -196,9 +220,50 @@ export function getMessageReplyMode(cfg: AppConfig): MessageReplyMode {
   return 'markdown';
 }
 
-/** Resolve the show-tool-calls preference with default fallback. */
+/**
+ * Resolve the tool-call display mode for a given chat scope.
+ *
+ * Precedence:
+ *   1. `toolCallDisplayInGroups` if `isGroup` and the field is set.
+ *   2. `toolCallDisplay` if set.
+ *   3. Legacy `showToolCalls === false` → `'hide'` (explicit opt-out wins).
+ *   4. Default `'compact'` — header-only one-liners. Picked over `'full'`
+ *      because full panels render inconsistently depending on how claude
+ *      batches its tool calls (contiguous ≥3 fold; interleaved-with-text
+ *      singletons spill the command inline), which read as "randomly
+ *      expanded". `compact` is uniform regardless of batching. A legacy
+ *      `showToolCalls: true` also lands here — it only ever meant "show
+ *      tools", which compact does.
+ *
+ * `isGroup` should be true for `'group'` / `'topic'` chat modes, false for
+ * `'p2p'`. Callers in non-chat contexts (e.g. the `/config` form) can pass
+ * `false` to read the base preference.
+ */
+export function getToolCallDisplay(cfg: AppConfig, isGroup: boolean): ToolCallDisplay {
+  const prefs = cfg.preferences;
+  if (isGroup && isValidToolCallDisplay(prefs?.toolCallDisplayInGroups)) {
+    return prefs!.toolCallDisplayInGroups!;
+  }
+  if (isValidToolCallDisplay(prefs?.toolCallDisplay)) {
+    return prefs!.toolCallDisplay!;
+  }
+  if (prefs?.showToolCalls === false) return 'hide';
+  return 'compact';
+}
+
+function isValidToolCallDisplay(v: unknown): v is ToolCallDisplay {
+  return v === 'full' || v === 'compact' || v === 'hide';
+}
+
+/**
+ * Resolve the show-tool-calls preference with default fallback.
+ *
+ * Retained for backward compatibility with callers that haven't migrated to
+ * the tri-state `getToolCallDisplay`. Returns `false` only when the effective
+ * mode is `'hide'`.
+ */
 export function getShowToolCalls(cfg: AppConfig): boolean {
-  return cfg.preferences?.showToolCalls !== false;
+  return getToolCallDisplay(cfg, false) !== 'hide';
 }
 
 /** Resolve the max-concurrent-runs preference with default + sanity clamp. */

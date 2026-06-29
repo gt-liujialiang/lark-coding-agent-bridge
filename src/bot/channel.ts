@@ -17,7 +17,7 @@ import { AskQuestionFlow } from './ask-question-flow';
 import { handleCardAction } from '../card/dispatcher';
 import { CallbackAuth } from '../card/callback-auth';
 import { CallbackNonceStore } from '../card/callback-store';
-import { renderCard } from '../card/run-renderer';
+import { renderCard, type RunCardRenderOptions } from '../card/run-renderer';
 import { renderIdleCheckpointCard } from '../card/idle-checkpoint-card';
 import {
   finalizeIfRunning,
@@ -27,7 +27,7 @@ import {
   reduce,
   type RunState,
 } from '../card/run-state';
-import { renderText } from '../card/text-renderer';
+import { renderText, type RenderTextOptions } from '../card/text-renderer';
 import { tryHandleCommand, type Controls } from '../commands';
 import type { AppConfig } from '../config/schema';
 import {
@@ -36,7 +36,7 @@ import {
   getMessageReplyMode,
   getRequireMentionInGroup,
   getRunIdleTimeoutMs,
-  getShowToolCalls,
+  getToolCallDisplay,
 } from '../config/schema';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { log, reportMetric, withTrace } from '../core/logger';
@@ -771,26 +771,32 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const replyMode = getMessageReplyMode(controls.cfg);
   log.info('flush', 'reply-mode', { mode: replyMode });
 
-  // Re-read prefs on every flush so toggling /config mid-stream takes
-  // effect immediately. Cheap object lookups, no allocation when on.
-  const filterForPrefs = (state: RunState): RunState => {
-    if (getShowToolCalls(controls.cfg)) return state;
-    return { ...state, blocks: state.blocks.filter((b) => b.kind !== 'tool') };
+  // Resolve tool-call display once per flush. Picks the group override when
+  // we're in a group / topic chat; falls back to the base pref in p2p. The
+  // renderer applies the mode; we no longer mutate state. Re-reading on
+  // every flush (not every event) is enough — `/config` changes take effect
+  // on the next user message, which is the existing contract.
+  const isGroupChat = mode !== 'p2p';
+  const toolDisplay = getToolCallDisplay(controls.cfg, isGroupChat);
+  log.info('flush', 'tool-display', { mode: toolDisplay, isGroup: isGroupChat });
+  const cardRenderOptions: RunCardRenderOptions = {
+    toolDisplay,
+    ...(callbackAuth
+      ? {
+          signCallback: (action: string) =>
+            callbackAuth.sign({
+              runId: execution.runId,
+              scope,
+              chatId,
+              operatorOpenId: firstMsg.senderId,
+              action,
+              policyFingerprint: flow.policy.policyFingerprint,
+              ttlMs: 24 * 60 * 60 * 1000,
+            }),
+        }
+      : {}),
   };
-  const cardRenderOptions = callbackAuth
-    ? {
-        signCallback: (action: string) =>
-          callbackAuth.sign({
-            runId: execution.runId,
-            scope,
-            chatId,
-            operatorOpenId: firstMsg.senderId,
-            action,
-            policyFingerprint: flow.policy.policyFingerprint,
-            ttlMs: 24 * 60 * 60 * 1000,
-          }),
-      }
-    : {};
+  const textRenderOptions: RenderTextOptions = { toolDisplay };
 
   // Bind an AskQuestionFlow to this run so the card dispatcher can route
   // AskUserQuestion button clicks back here. Only when callbackAuth is
@@ -854,7 +860,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         async (state) => {
           latestState = state;
           if (cardCtrl) {
-            await cardCtrl.update(renderCard(filterForPrefs(state), cardRenderOptions));
+            await cardCtrl.update(renderCard(state, cardRenderOptions));
           }
         },
         async (state) => {
@@ -864,7 +870,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           if (state.blocks.length === 0 && state.terminal === 'running') return;
           await channel.send(
             chatId,
-            { card: renderCard(filterForPrefs(state), cardRenderOptions) },
+            { card: renderCard(state, cardRenderOptions) },
             sendOpts,
           );
         },
@@ -878,7 +884,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             producer: async (ctrl) => {
               producerStarted = true;
               cardCtrl = ctrl;
-              await ctrl.update(renderCard(filterForPrefs(latestState), cardRenderOptions));
+              await ctrl.update(renderCard(latestState, cardRenderOptions));
               await renderDone;
             },
           },
@@ -893,7 +899,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         fallback: async (state) => {
           await channel.send(
             chatId,
-            { card: renderCard(filterForPrefs(state), cardRenderOptions) },
+            { card: renderCard(state, cardRenderOptions) },
             sendOpts,
           );
         },
@@ -911,7 +917,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         async (state) => {
           latestState = state;
           if (markdownCtrl) {
-            await markdownCtrl.setContent(renderText(filterForPrefs(state)));
+            await markdownCtrl.setContent(renderText(state, textRenderOptions));
           }
         },
         undefined,
@@ -923,7 +929,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           markdown: async (ctrl) => {
             producerStarted = true;
             markdownCtrl = ctrl;
-            await ctrl.setContent(renderText(filterForPrefs(latestState)));
+            await ctrl.setContent(renderText(latestState, textRenderOptions));
             await renderDone;
           },
         },
@@ -935,7 +941,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         renderDone,
         producerStarted: () => producerStarted,
         fallback: async (state) => {
-          const body = renderText(filterForPrefs(state));
+          const body = renderText(state, textRenderOptions);
           if (body.trim()) {
             await channel.send(chatId, { markdown: body }, sendOpts);
           }
@@ -955,7 +961,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         undefined,
         sendIdleCheckpointCard,
       );
-      const body = renderText(filterForPrefs(finalState));
+      const body = renderText(finalState, textRenderOptions);
       if (body.trim()) {
         await channel.send(chatId, { markdown: body }, sendOpts);
       }

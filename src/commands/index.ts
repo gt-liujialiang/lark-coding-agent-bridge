@@ -15,14 +15,20 @@ import {
 import { configCancelledCard, configFailedCard, configFormCard, configSavedCard } from '../card/config-card';
 import { forgetManagedCard, sendManagedCard, updateManagedCard } from '../card/managed';
 import { helpCard, resumeCard, statusCard, workspacesCard } from '../card/templates';
-import type { AppConfig, AppPreferences, MessageReplyMode, TenantBrand } from '../config/schema';
+import type {
+  AppConfig,
+  AppPreferences,
+  MessageReplyMode,
+  TenantBrand,
+  ToolCallDisplay,
+} from '../config/schema';
 import {
   getAgentStopGraceMs,
   getMaxConcurrentRuns,
   getMessageReplyMode,
   getRequireMentionInGroup,
   getRunIdleTimeoutMs,
-  getShowToolCalls,
+  getToolCallDisplay,
   secretKeyForApp,
 } from '../config/schema';
 import type { ProfileAccess, ProfileConfig } from '../config/profile-schema';
@@ -1904,7 +1910,8 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
   const access = ctx.controls.profileConfig.access;
   const card = configFormCard({
     messageReply: getMessageReplyMode(ctx.controls.cfg),
-    showToolCalls: getShowToolCalls(ctx.controls.cfg),
+    toolCallDisplay: getToolCallDisplay(ctx.controls.cfg, false),
+    toolCallDisplayInGroups: resolveGroupDisplayPref(ctx.controls.cfg),
     maxConcurrentRuns: getMaxConcurrentRuns(ctx.controls.cfg),
     runIdleTimeoutMinutes: ms ? Math.round(ms / 60_000) : 0,
     requireMentionInGroup: getRequireMentionInGroup(ctx.controls.cfg),
@@ -1953,8 +1960,21 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
     rawReply === 'markdown' || rawReply === 'text' || rawReply === 'card'
       ? (rawReply as MessageReplyMode)
       : 'card';
-  const rawTools = String(fv.show_tool_calls ?? '').trim();
-  const showToolCalls = rawTools !== 'hide';
+  const currentToolCallDisplay = getToolCallDisplay(ctx.controls.cfg, false);
+  const currentGroupOverride = ctx.controls.cfg.preferences?.toolCallDisplayInGroups;
+  const rawToolDisplay = String(fv.tool_call_display ?? '').trim();
+  const toolCallDisplay: ToolCallDisplay = parseToolCallDisplay(rawToolDisplay, currentToolCallDisplay);
+  const rawToolDisplayGroups = String(fv.tool_call_display_in_groups ?? '').trim();
+  // `'inherit'` clears the group override; valid tri-state values set it; an
+  // empty / unexpected value keeps whatever's currently stored.
+  let toolCallDisplayInGroups: ToolCallDisplay | undefined;
+  if (rawToolDisplayGroups === 'inherit') {
+    toolCallDisplayInGroups = undefined;
+  } else if (rawToolDisplayGroups === 'full' || rawToolDisplayGroups === 'compact' || rawToolDisplayGroups === 'hide') {
+    toolCallDisplayInGroups = rawToolDisplayGroups;
+  } else {
+    toolCallDisplayInGroups = currentGroupOverride;
+  }
   // Parse max_concurrent_runs; invalid input falls back to current value.
   const rawMaxCC = String(fv.max_concurrent_runs ?? '').trim();
   const parsedMaxCC = Number(rawMaxCC);
@@ -2017,7 +2037,11 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       // markdown card. Set unconditionally on every submit so a user who
       // explicitly picks any option gets out of the legacy-coerce path.
       messageReplyMigrated: true,
-      showToolCalls,
+      toolCallDisplay,
+      toolCallDisplayInGroups,
+      // Drop the legacy boolean — `toolCallDisplay` is now canonical. Leaving
+      // both on disk would let stale code paths read inconsistent values.
+      showToolCalls: undefined,
       maxConcurrentRuns,
       runIdleTimeoutMinutes,
       requireMentionInGroup,
@@ -2061,7 +2085,8 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
 
     log.info('command', 'config-saved', {
       messageReply,
-      showToolCalls,
+      toolCallDisplay,
+      toolCallDisplayInGroups: toolCallDisplayInGroups ?? 'inherit',
       maxConcurrentRuns,
       runIdleTimeoutMinutes,
       requireMentionInGroup,
@@ -2076,7 +2101,8 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       formMsgId,
       configSavedCard({
         messageReply,
-        showToolCalls,
+        toolCallDisplay,
+        toolCallDisplayInGroups: toolCallDisplayInGroups ?? 'inherit',
         maxConcurrentRuns,
         runIdleTimeoutMinutes,
         requireMentionInGroup,
@@ -2088,6 +2114,22 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       }),
     );
   })();
+}
+
+function parseToolCallDisplay(raw: string, fallback: ToolCallDisplay): ToolCallDisplay {
+  if (raw === 'full' || raw === 'compact' || raw === 'hide') return raw;
+  return fallback;
+}
+
+/**
+ * What to pre-select in the "群里的工具调用显示" picker. Returns `'inherit'`
+ * when the user hasn't set a group-specific override (the picker defaults to
+ * "跟随上方"), otherwise the stored override value.
+ */
+function resolveGroupDisplayPref(cfg: AppConfig): ToolCallDisplay | 'inherit' {
+  const v = cfg.preferences?.toolCallDisplayInGroups;
+  if (v === 'full' || v === 'compact' || v === 'hide') return v;
+  return 'inherit';
 }
 
 function configFailureMessage(step: string, rollbackFailed: boolean, larkCliPolicyApplied: boolean): string {
