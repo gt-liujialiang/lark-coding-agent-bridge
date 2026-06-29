@@ -161,6 +161,14 @@ export interface AppPreferences {
    * Range 100-30000; out-of-range values fall back to default.
    */
   agentStopGraceMs?: number;
+  /**
+   * In p2p (private) chats, launch claude in `bypassPermissions` so it never
+   * emits a per-tool permission prompt — the owner is the only participant, so
+   * per-tool approval is pure friction. Default `true`. Set `false` to fall
+   * back to the access-tier-resolved permission mode in p2p as well. Groups /
+   * topics are unaffected by this flag.
+   */
+  claudeP2pAutoApprove?: boolean;
 }
 
 /**
@@ -309,6 +317,15 @@ export function getAgentStopGraceMs(cfg: AppConfig): number {
   const raw = cfg.preferences?.agentStopGraceMs;
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return 5000;
   return Math.min(30_000, Math.max(100, Math.floor(raw)));
+}
+
+/**
+ * Resolve whether p2p chats auto-approve (run claude in bypassPermissions).
+ * Default `true` — the `!== false` check makes older configs without the
+ * field inherit the on-by-default behavior.
+ */
+export function getClaudeP2pAutoApprove(cfg: AppConfig): boolean {
+  return cfg.preferences?.claudeP2pAutoApprove !== false;
 }
 
 export function getRunIdleTimeoutMs(cfg: AppConfig): number | undefined {
