@@ -18,7 +18,6 @@ import { handleCardAction } from '../card/dispatcher';
 import { CallbackAuth } from '../card/callback-auth';
 import { CallbackNonceStore } from '../card/callback-store';
 import { renderCard, type RunCardRenderOptions } from '../card/run-renderer';
-import { renderIdleCheckpointCard } from '../card/idle-checkpoint-card';
 import {
   finalizeIfRunning,
   initialState,
@@ -830,22 +829,11 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const reactionPromise =
     replyMode === 'card' ? undefined : addWorkingReaction(channel, lastMsg.messageId);
 
-  // Shared across all three reply modes: when PtySession emits an
-  // idle_checkpoint, render and send a check-in card as a brand-new message.
-  // Requires callbackAuth — without it we can't sign the bridge_token the
-  // [继续等待]/[立即终止] buttons need, so we silently drop the notification.
-  const sendIdleCheckpointCard = cardRenderOptions.signCallback
-    ? async (event: Extract<AgentEvent, { type: 'idle_checkpoint' }>): Promise<void> => {
-        const bridgeToken = cardRenderOptions.signCallback!('agent_callback');
-        const card = renderIdleCheckpointCard({
-          snapshot: event.snapshot,
-          idleMs: event.idleMs,
-          checkpointNumber: event.checkpointNumber,
-          bridgeToken,
-        });
-        await channel.send(chatId, { card }, sendOpts);
-      }
-    : undefined;
+  // Idle checkpoints (PtySession's 3/10/30-min check-ins) intentionally do NOT
+  // send a card — a brand-new message per check-in fragmented the chat. The
+  // event is still consumed in processAgentStream to disable the channel idle
+  // watchdog so long-running turns aren't killed; it just renders nothing, so
+  // no `onIdleCheckpoint` handler is passed below.
 
   try {
     if (replyMode === 'card') {
@@ -866,18 +854,12 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             await cardCtrl.update(renderCard(state, cardRenderOptions));
           }
         },
-        async (state) => {
-          // Post-AskUserQuestion: send claude's continuation as a brand-new
-          // card so the user gets a fresh message instead of seeing the
-          // pre-question card mutate further.
-          if (state.blocks.length === 0 && state.terminal === 'running') return;
-          await channel.send(
-            chatId,
-            { card: renderCard(state, cardRenderOptions) },
-            sendOpts,
-          );
-        },
-        sendIdleCheckpointCard,
+        // AskUserQuestion continuation updates the ORIGINAL streaming card in
+        // place instead of posting a new card — passing no `flushNewCard`
+        // keeps processAgentStream from freezing + re-sending (see its body).
+        undefined,
+        // Idle checkpoints render nothing (see note above) — no handler.
+        undefined,
       );
       const streamDone = channel.stream(
         chatId,
@@ -924,7 +906,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           }
         },
         undefined,
-        sendIdleCheckpointCard,
+        undefined,
       );
       const streamDone = channel.stream(
         chatId,
@@ -962,7 +944,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         recordSession,
         async () => {},
         undefined,
-        sendIdleCheckpointCard,
+        undefined,
       );
       const body = renderText(finalState, textRenderOptions);
       if (body.trim()) {
