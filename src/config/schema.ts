@@ -322,6 +322,12 @@ export function getClaudeP2pAutoApprove(cfg: AppConfig): boolean {
   return cfg.preferences?.claudeP2pAutoApprove !== false;
 }
 
+/**
+ * Resolve the global default idle-timeout in ms. Returns `undefined` when
+ * disabled (the default). Clamps to [1, 120] minutes when set so a typo
+ * can't lock the bot into a 1-second kill loop or wait forever to a number
+ * the user didn't really mean.
+ */
 export function getRunIdleTimeoutMs(cfg: AppConfig): number | undefined {
   const raw = cfg.preferences?.runIdleTimeoutMinutes;
   if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return undefined;
