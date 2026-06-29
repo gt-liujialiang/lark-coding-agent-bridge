@@ -189,6 +189,35 @@ describe('run policy', () => {
     if (result.ok) expect(result.permissionMode).toBe('acceptEdits');
   });
 
+  it('forces bypassPermissions for p2p even with a read-only access tier', () => {
+    const result = evaluateRunPolicy(
+      baseInput({
+        chatMode: 'p2p',
+        profileConfig: profile({
+          permissions: { defaultAccess: 'read-only', maxAccess: 'read-only' },
+        }),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.accessMode).toBe('read-only');            // access tier unchanged
+      expect(result.permissionMode).toBe('bypassPermissions'); // p2p override wins
+    }
+  });
+
+  it('does not apply the p2p bypass override for codex runs', () => {
+    const codexProfile = profile({
+      agentKind: 'codex',
+      permissions: { defaultAccess: 'workspace', maxAccess: 'workspace' },
+    });
+    const result = evaluateRunPolicy({
+      ...baseInput({ chatMode: 'p2p', profileConfig: codexProfile }),
+      capability: codexCapability(codexProfile),
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.permissionMode).toBe('acceptEdits');
+  });
+
   it('is pure policy calculation and does not import IO or API clients', () => {
     const source = readFileSync(join(process.cwd(), 'src/policy/run-policy.ts'), 'utf8');
 

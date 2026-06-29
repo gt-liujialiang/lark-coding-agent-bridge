@@ -302,12 +302,6 @@ export function getRequireMentionInGroup(cfg: AppConfig): boolean {
 }
 
 /**
- * Resolve the global default idle-timeout in ms. Returns `undefined` when
- * disabled (the default). Clamps to [1, 120] minutes when set so a typo
- * can't lock the bot into a 1-second kill loop or wait forever to a number
- * the user didn't really mean.
- */
-/**
  * Grace period before SIGKILL fallback when stopping a claude subprocess.
  * Returns ms. Defaults to 5000 (5 seconds). Clamps to [100, 30000] so a
  * typo can't either make stop() effectively SIGKILL-immediate or hang for
