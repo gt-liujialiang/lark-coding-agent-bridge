@@ -104,6 +104,12 @@ export interface AppPreferences {
    */
   showToolCalls?: boolean;
   /**
+   * Whether the bot replies in-thread (starts/continues a 话题) in regular
+   * (non-topic) group chats. Default true. Topic-mode groups always thread
+   * regardless; p2p never threads. Set false to keep flat quoted replies.
+   */
+  replyInThreadInGroup?: boolean;
+  /**
    * Cap on concurrent claude runs across all chats / topics. Excess runs
    * queue FIFO. Default 10. Mostly relevant for topic groups where each
    * topic can spawn its own run; capping protects RAM / token spend.
@@ -226,6 +232,15 @@ export function getRequireMentionInGroup(cfg: AppConfig): boolean {
     return profileAccess.requireMentionInGroup;
   }
   return true;
+}
+
+/**
+ * Resolve the reply-in-thread-in-group preference. Default `true` — the
+ * `!== false` check makes older configs without the field inherit the new
+ * default. Only affects regular groups; topic groups thread unconditionally.
+ */
+export function getReplyInThreadInGroup(cfg: AppConfig): boolean {
+  return cfg.preferences?.replyInThreadInGroup !== false;
 }
 
 /**
