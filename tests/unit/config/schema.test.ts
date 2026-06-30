@@ -4,7 +4,7 @@ import type { AppConfig } from '../../../src/config/schema.js';
 
 function cfgWith(replyInThreadInGroup: boolean | undefined): AppConfig {
   return {
-    accounts: { app: { id: 'a', secret: 's', tenant: 't' } },
+    accounts: { app: { id: 'a', secret: 's', tenant: 'feishu' } },
     preferences: replyInThreadInGroup === undefined ? {} : { replyInThreadInGroup },
   } as AppConfig;
 }
