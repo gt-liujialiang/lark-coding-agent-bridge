@@ -9,6 +9,7 @@ export interface ConfigFormOpts {
   /** 0 means "disabled". */
   runIdleTimeoutMinutes: number;
   requireMentionInGroup: boolean;
+  replyInThreadInGroup: boolean;
   larkCliIdentity: LarkCliIdentityPreset;
   allowedUsers: string[];
   allowedChats: string[];
@@ -186,6 +187,23 @@ export function configFormCard(opts: ConfigFormOpts): object {
             {
               tag: 'markdown',
               content:
+                '\n**群聊话题回复**\n' +
+                '_是(默认):普通群里 bot 用「话题」回复每条消息,讨论更有条理_\n' +
+                '_否:bot 直接引用回复,不开话题_\n' +
+                '_话题群天生按话题组织,此项不影响它;私聊永远不开话题_',
+            },
+            {
+              tag: 'select_static',
+              name: 'reply_in_thread_in_group',
+              initial_option: opts.replyInThreadInGroup ? 'yes' : 'no',
+              options: [
+                { text: { tag: 'plain_text', content: '是(默认)' }, value: 'yes' },
+                { text: { tag: 'plain_text', content: '否' }, value: 'no' },
+              ],
+            },
+            {
+              tag: 'markdown',
+              content:
                 '\n**lark-cli 身份策略**\n' +
                 '_只允许应用身份:使用 bot/app 能力,不访问个人资源_\n' +
                 '_允许用户身份:保留应用身份,并允许已授权用户访问个人日历、邮箱、云盘等资源_',
@@ -264,6 +282,7 @@ export function configSavedCard(opts: ConfigFormOpts): object {
             `**并发上限**:\`${opts.maxConcurrentRuns}\`\n` +
             `**run 探活**:\`${opts.runIdleTimeoutMinutes > 0 ? `${opts.runIdleTimeoutMinutes} 分钟` : '关闭'}\`\n` +
             `**群里需要 @ bot**:\`${opts.requireMentionInGroup ? '是' : '否'}\`\n\n` +
+            `**群聊话题回复**:\`${opts.replyInThreadInGroup ? '是' : '否'}\`\n` +
             `**lark-cli 身份策略**:\`${opts.larkCliIdentity === 'user-default' ? '允许用户身份' : '只允许应用身份'}\`\n\n` +
             '🔒 **访问控制**\n' +
             `**允许私聊的用户**:${summarize(opts.allowedUsers)}\n` +

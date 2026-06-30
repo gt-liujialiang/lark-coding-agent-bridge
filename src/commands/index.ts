@@ -20,6 +20,7 @@ import {
   getAgentStopGraceMs,
   getMaxConcurrentRuns,
   getMessageReplyMode,
+  getReplyInThreadInGroup,
   getRequireMentionInGroup,
   getRunIdleTimeoutMs,
   getShowToolCalls,
@@ -1747,6 +1748,7 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
     maxConcurrentRuns: getMaxConcurrentRuns(ctx.controls.cfg),
     runIdleTimeoutMinutes: ms ? Math.round(ms / 60_000) : 0,
     requireMentionInGroup: getRequireMentionInGroup(ctx.controls.cfg),
+    replyInThreadInGroup: getReplyInThreadInGroup(ctx.controls.cfg),
     larkCliIdentity: ctx.controls.profileConfig.larkCli.identityPreset,
     allowedUsers: access.allowedUsers,
     allowedChats: access.allowedChats,
@@ -1825,6 +1827,12 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
   if (rawRequireMention === 'yes') requireMentionInGroup = true;
   else if (rawRequireMention === 'no') requireMentionInGroup = false;
   else requireMentionInGroup = getRequireMentionInGroup(ctx.controls.cfg);
+  // Parse reply_in_thread_in_group. Empty / unexpected keeps current.
+  const rawReplyInThread = String(fv.reply_in_thread_in_group ?? '').trim();
+  let replyInThreadInGroup: boolean;
+  if (rawReplyInThread === 'yes') replyInThreadInGroup = true;
+  else if (rawReplyInThread === 'no') replyInThreadInGroup = false;
+  else replyInThreadInGroup = getReplyInThreadInGroup(ctx.controls.cfg);
   const rawLarkCliIdentity = String(fv.lark_cli_identity ?? '').trim();
   const larkCliIdentity =
     rawLarkCliIdentity === 'user-default' || rawLarkCliIdentity === 'bot-only'
@@ -1860,6 +1868,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       maxConcurrentRuns,
       runIdleTimeoutMinutes,
       requireMentionInGroup,
+      replyInThreadInGroup,
     };
 
     let failureStep = 'config.save';
@@ -1904,6 +1913,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       maxConcurrentRuns,
       runIdleTimeoutMinutes,
       requireMentionInGroup,
+      replyInThreadInGroup,
       larkCliIdentity,
       allowedUsersCount: access.allowedUsers.length,
       allowedChatsCount: access.allowedChats.length,
@@ -1919,6 +1929,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
         maxConcurrentRuns,
         runIdleTimeoutMinutes,
         requireMentionInGroup,
+        replyInThreadInGroup,
         larkCliIdentity,
         allowedUsers: access.allowedUsers,
         allowedChats: access.allowedChats,
