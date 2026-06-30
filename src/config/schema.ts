@@ -104,6 +104,12 @@ export interface AppPreferences {
    */
   showToolCalls?: boolean;
   /**
+   * Whether the bot replies in-thread (starts/continues a 话题) in regular
+   * (non-topic) group chats. Default true. Topic-mode groups always thread
+   * regardless; p2p never threads. Set false to keep flat quoted replies.
+   */
+  replyInThreadInGroup?: boolean;
+  /**
    * Cap on concurrent claude runs across all chats / topics. Excess runs
    * queue FIFO. Default 10. Mostly relevant for topic groups where each
    * topic can spawn its own run; capping protects RAM / token spend.
@@ -229,11 +235,14 @@ export function getRequireMentionInGroup(cfg: AppConfig): boolean {
 }
 
 /**
- * Resolve the global default idle-timeout in ms. Returns `undefined` when
- * disabled (the default). Clamps to [1, 120] minutes when set so a typo
- * can't lock the bot into a 1-second kill loop or wait forever to a number
- * the user didn't really mean.
+ * Resolve the reply-in-thread-in-group preference. Default `true` — the
+ * `!== false` check makes older configs without the field inherit the new
+ * default. Only affects regular groups; topic groups thread unconditionally.
  */
+export function getReplyInThreadInGroup(cfg: AppConfig): boolean {
+  return cfg.preferences?.replyInThreadInGroup !== false;
+}
+
 /**
  * Grace period before SIGKILL fallback when stopping a claude subprocess.
  * Returns ms. Defaults to 5000 (5 seconds). Clamps to [100, 30000] so a
@@ -246,6 +255,12 @@ export function getAgentStopGraceMs(cfg: AppConfig): number {
   return Math.min(30_000, Math.max(100, Math.floor(raw)));
 }
 
+/**
+ * Resolve the global default idle-timeout in ms. Returns `undefined` when
+ * disabled (the default). Clamps to [1, 120] minutes when set so a typo
+ * can't lock the bot into a 1-second kill loop or wait forever to a number
+ * the user didn't really mean.
+ */
 export function getRunIdleTimeoutMs(cfg: AppConfig): number | undefined {
   const raw = cfg.preferences?.runIdleTimeoutMinutes;
   if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return undefined;
