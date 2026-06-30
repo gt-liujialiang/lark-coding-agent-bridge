@@ -33,6 +33,7 @@ import {
   getMaxConcurrentRuns,
   getMessageReplyMode,
   getRequireMentionInGroup,
+  getReplyInThreadInGroup,
   getRunIdleTimeoutMs,
   getShowToolCalls,
 } from '../config/schema';
@@ -52,6 +53,7 @@ import type { SessionStore } from '../session/store';
 import type { WorkspaceStore } from '../workspace/store';
 import { ActiveRuns, type RunHandle } from './active-runs';
 import { ChatModeCache, type ChatMode } from './chat-mode-cache';
+import { shouldReplyInThread, replyQuoteTargetForMessage } from './thread-policy';
 import { handleCommentMention } from './comments';
 import { recordRunSessionEvent, startRunFlow } from './run-flow';
 import { commandSessionCatalogIdentity } from './session-catalog-identity';
@@ -653,7 +655,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const quoteTargets = [
     ...new Set(
       batch
-        .map((m) => replyQuoteTargetForMessage(m, mode))
+        .map((m) => replyQuoteTargetForMessage(m))
         .filter((id): id is string => Boolean(id) && !batchIds.has(id!)),
     ),
   ];
@@ -673,12 +675,14 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const prompt = buildPrompt(batch, attachments, quotes, channel.botIdentity);
   log.info('prompt', 'built', { promptChars: prompt.length, quotes: quotes.length });
 
-  // For topic groups: thread the reply so it lands in the same topic as the
-  // user's message. Otherwise the SDK posts at top level and the user's
-  // topic discussion breaks visually.
+  // Thread the reply when policy says so: topic groups (when the message is
+  // in a thread) and regular groups when the operator toggle is on. p2p never
+  // threads. All downstream send/stream sites reuse this single sendOpts.
   const sendOpts = {
     replyTo: lastMsg.messageId,
-    ...(mode === 'topic' && threadId ? { replyInThread: true } : {}),
+    ...(shouldReplyInThread(mode, threadId, getReplyInThreadInGroup(controls.cfg))
+      ? { replyInThread: true }
+      : {}),
   };
 
   const accessDecision =
@@ -1232,21 +1236,6 @@ function mergeMentions(batch: NormalizedMessage[]): BridgePromptMention[] {
     }
   }
   return out;
-}
-
-function replyQuoteTargetForMessage(
-  msg: NormalizedMessage,
-  mode: ChatMode,
-): string | undefined {
-  const replyTo = msg.replyToMessageId;
-  if (!replyTo) return undefined;
-
-  // Feishu topic messages use root_id/parent_id as the topic root anchor even
-  // for ordinary in-topic messages. Treat that as structure, not a quote.
-  if (mode === 'topic' && msg.threadId && msg.rootId && replyTo === msg.rootId) {
-    return undefined;
-  }
-  return replyTo;
 }
 
 function stripAttachmentRefs(text: string, fileKeys: string[]): string {
