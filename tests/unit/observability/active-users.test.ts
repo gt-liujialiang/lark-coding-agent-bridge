@@ -65,6 +65,23 @@ describe('active-users store', () => {
     });
   });
 
+  it('preserves previously recorded name when repeat call omits name', async () => {
+    await recordActiveUser(file, {
+      openId: 'ou_1', name: '张三', chatId: 'oc_1', chatType: 'p2p',
+      at: '2026-07-15T10:00:00.000Z',
+    });
+    await recordActiveUser(file, {
+      openId: 'ou_1', chatId: 'oc_2', chatType: 'group',
+      at: '2026-07-15T11:00:00.000Z',
+    });
+    const users = await readActiveUsers(file);
+    expect(users).toHaveLength(1);
+    expect(users[0]).toMatchObject({
+      name: '张三',
+      messageCount: 2,
+    });
+  });
+
   it('tracks multiple distinct users', async () => {
     await recordActiveUser(file, { openId: 'ou_1', chatId: 'oc_1', chatType: 'p2p', at: '2026-07-15T10:00:00.000Z' });
     await recordActiveUser(file, { openId: 'ou_2', chatId: 'oc_1', chatType: 'p2p', at: '2026-07-15T10:01:00.000Z' });

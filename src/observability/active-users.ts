@@ -1,7 +1,6 @@
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import * as lockfile from 'proper-lockfile';
+import { readFile } from 'node:fs/promises';
 import { writeFileAtomic } from '../platform/atomic-write';
+import { withFileLock } from '../platform/file-lock';
 
 export interface ActiveUserRecord {
   openId: string;
@@ -25,11 +24,27 @@ export interface RecordActiveUserInput {
   at?: string;
 }
 
-/** 只读加载台账;文件缺失 / 损坏 / 非数组 → 返回空数组。 */
+/** Strict load: ENOENT → []; corrupt/non-array JSON → []; other IO errors THROW. */
+async function loadForUpdate(filePath: string): Promise<ActiveUserRecord[]> {
+  let text: string;
+  try {
+    text = await readFile(filePath, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err; // EACCES/EBUSY/EIO — do not silently wipe the ledger
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return Array.isArray(parsed) ? parsed.filter(isActiveUserRecord) : [];
+  } catch {
+    return []; // corrupt JSON is already unusable — start fresh
+  }
+}
+
+/** 只读加载台账(尽力而为,永不抛出);文件缺失 / 损坏 / IO 错误 → 返回空数组。 */
 export async function readActiveUsers(filePath: string): Promise<ActiveUserRecord[]> {
   try {
-    const parsed = JSON.parse(await readFile(filePath, 'utf8')) as unknown;
-    return Array.isArray(parsed) ? parsed.filter(isActiveUserRecord) : [];
+    return await loadForUpdate(filePath);
   } catch {
     return [];
   }
@@ -41,8 +56,8 @@ export async function recordActiveUser(
   input: RecordActiveUserInput,
 ): Promise<void> {
   const at = input.at ?? new Date().toISOString();
-  await withLedgerLock(filePath, async () => {
-    const records = await readActiveUsers(filePath);
+  await withFileLock(filePath, async () => {
+    const records = await loadForUpdate(filePath);
     const existing = records.find((r) => r.openId === input.openId);
     if (existing) {
       existing.messageCount += 1;
@@ -63,24 +78,6 @@ export async function recordActiveUser(
     }
     await writeFileAtomic(filePath, `${JSON.stringify(records, null, 2)}\n`, { mode: 0o600 });
   });
-}
-
-async function withLedgerLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-  const lockTarget = `${filePath}.lock`;
-  await mkdir(dirname(lockTarget), { recursive: true });
-  await writeFile(lockTarget, '', { flag: 'a', mode: 0o600 });
-  await chmod(lockTarget, 0o600).catch(() => {});
-  const release = await lockfile.lock(lockTarget, {
-    realpath: false,
-    stale: 30_000,
-    update: 10_000,
-    retries: { retries: 10, minTimeout: 10, maxTimeout: 100 },
-  });
-  try {
-    return await fn();
-  } finally {
-    await release();
-  }
 }
 
 function isActiveUserRecord(v: unknown): v is ActiveUserRecord {

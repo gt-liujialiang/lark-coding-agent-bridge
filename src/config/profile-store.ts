@@ -1,7 +1,7 @@
-import { chmod, mkdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import * as lockfile from 'proper-lockfile';
+import { mkdir, readFile, rename, rm, rmdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { writeFileAtomic } from '../platform/atomic-write';
+import { withFileLock } from '../platform/file-lock';
 import { resolveAppPaths } from './app-paths';
 import {
   normalizeProfileConfig,
@@ -99,26 +99,8 @@ function serializeProfileConfig(profile: ProfileConfig): StoredProfileConfig {
   };
 }
 
-export async function withConfigFileLock<T>(configPath: string, fn: () => Promise<T>): Promise<T> {
-  const lockTarget = `${configPath}.lock`;
-  await mkdir(dirname(lockTarget), { recursive: true });
-  await writeFile(lockTarget, '', { flag: 'a', mode: 0o600 });
-  await chmod(lockTarget, 0o600).catch(() => {});
-  const release = await lockfile.lock(lockTarget, {
-    realpath: false,
-    stale: 30_000,
-    update: 10_000,
-    retries: {
-      retries: 10,
-      minTimeout: 10,
-      maxTimeout: 100,
-    },
-  });
-  try {
-    return await fn();
-  } finally {
-    await release();
-  }
+export function withConfigFileLock<T>(configPath: string, fn: () => Promise<T>): Promise<T> {
+  return withFileLock(configPath, fn);
 }
 
 export async function readActiveProfile(rootDir?: string): Promise<string | undefined> {
