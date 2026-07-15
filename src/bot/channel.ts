@@ -64,7 +64,8 @@ import { ProcessPool } from './process-pool';
 import { fetchQuotedContext, type QuotedContext } from './quote';
 import { addWorkingReaction, removeReaction } from './reaction';
 import { fetchKnownChats } from './lark-info';
-import type { AppPaths } from '../config/app-paths';
+import { resolveAppPaths, type AppPaths } from '../config/app-paths';
+import { recordActiveUser } from '../observability/active-users';
 
 const DEBOUNCE_MS = 600;
 const STREAM_TERMINAL_GRACE_MS = 3000;
@@ -544,6 +545,22 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
       );
     }
     return;
+  }
+
+  // 记录活跃用户台账(仅真人;失败不阻塞主流程)。
+  if (senderTypeOf(msg) === 'user') {
+    const activeUsersFile = resolveAppPaths({
+      rootDir: dirname(controls.configPath),
+      profile: controls.profile,
+    }).activeUsersFile;
+    void recordActiveUser(activeUsersFile, {
+      openId: msg.senderId,
+      name: msg.senderName,
+      chatId: msg.chatId,
+      chatType: msg.chatType,
+    }).catch((err) =>
+      log.warn('intake', 'active-user-record-failed', { err: String(err) }),
+    );
   }
 
   // Group-mention policy. p2p is always unrestricted; in groups (regular and
