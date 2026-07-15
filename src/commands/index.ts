@@ -53,6 +53,7 @@ import {
   reduce,
   type RunState,
 } from '../card/run-state';
+import { readActiveUsers, type ActiveUserRecord } from '../observability/active-users';
 import { formatRelTime, listRecentSessions, type SessionSummary } from '../session/history';
 import {
   listCodexThreadHistory,
@@ -157,6 +158,7 @@ const handlers: Record<string, Handler> = {
   '/ws': handleWs,
   '/resume': handleResume,
   '/status': handleStatus,
+  '/stats': handleStats,
   '/help': handleHelp,
   '/account': handleAccount,
   '/config': handleConfig,
@@ -179,6 +181,7 @@ const handlers: Record<string, Handler> = {
 const ADMIN_COMMANDS = new Set([
   '/account',
   '/config',
+  '/stats',
   '/ps',
   '/exit',
   '/reconnect',
@@ -807,6 +810,37 @@ async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
     chatMode: ctx.chatMode,
   });
   await ctx.channel.send(ctx.msg.chatId, { card }, { replyTo: ctx.msg.messageId });
+}
+
+async function handleStats(_args: string, ctx: CommandContext): Promise<void> {
+  const file = commandProfilePaths(ctx).activeUsersFile;
+  const users = await readActiveUsers(file);
+  if (users.length === 0) {
+    await reply(ctx, '📊 暂无活跃用户记录。');
+    return;
+  }
+  const total = users.length;
+  const totalMessages = users.reduce((s, u) => s + u.messageCount, 0);
+  const label = (u: ActiveUserRecord): string => u.name ?? u.openId.slice(-6);
+  const fmtTime = (iso: string): string => iso.slice(0, 16).replace('T', ' ');
+  const topAskers = [...users]
+    .sort((a, b) => b.messageCount - a.messageCount)
+    .slice(0, 10);
+  const recent = [...users]
+    .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))
+    .slice(0, 5);
+  const lines = [
+    '📊 **活跃用户台账**',
+    '',
+    `**总活跃用户**:${total}　**累计提问**:${totalMessages}`,
+    '',
+    `**提问最多 Top ${topAskers.length}**`,
+    ...topAskers.map((u, i) => `${i + 1}. ${label(u)} — ${u.messageCount} 次`),
+    '',
+    '**最近活跃**',
+    ...recent.map((u) => `- ${label(u)} · ${fmtTime(u.lastSeenAt)}`),
+  ];
+  await reply(ctx, lines.join('\n'));
 }
 
 function formatOwnerState(ctx: CommandContext): string {
