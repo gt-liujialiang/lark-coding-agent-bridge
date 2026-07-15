@@ -78,4 +78,9 @@ describe('resolveAppPaths', () => {
     expect(() => resolveAppPaths({ rootDir: root, profile: 'codex dev' })).toThrow(/invalid profile name/i);
     expect(() => resolveAppPaths({ rootDir: root, profile: 'b64_Y29kZXggZGV2' })).not.toThrow();
   });
+
+  it('places active-users ledger under the profile dir', () => {
+    const paths = resolveAppPaths({ rootDir: '/root', profile: 'claude' });
+    expect(paths.activeUsersFile).toBe('/root/profiles/claude/active-users.json');
+  });
 });

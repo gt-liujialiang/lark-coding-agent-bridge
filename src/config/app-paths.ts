@@ -29,6 +29,7 @@ export interface AppPaths {
   userLockDir: string;
   profileLockFile: string;
   appLockFile(appId: string): string;
+  activeUsersFile: string;
 }
 
 const DEFAULT_PROFILE = 'claude';
@@ -58,6 +59,7 @@ export function resolveAppPaths(opts: ResolveAppPathsOptions = {}): AppPaths {
     larkCliTargetConfigFile: join(profileDir, 'lark-cli', 'lark-channel', 'config.json'),
     mediaDir: join(profileDir, 'media'),
     logsDir: join(profileDir, 'logs'),
+    activeUsersFile: join(profileDir, 'active-users.json'),
     registryDir,
     userRegistryFile: join(registryDir, 'processes.json'),
     userLockDir,
