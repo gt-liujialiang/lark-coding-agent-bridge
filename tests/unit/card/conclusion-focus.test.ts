@@ -7,21 +7,6 @@ function stateFrom(events: AgentEvent[]): RunState {
   return events.reduce(reduce, initialState);
 }
 
-// 递归收集所有 markdown content，便于断言。
-function markdownContents(card: object): string[] {
-  const out: string[] = [];
-  const walk = (node: unknown): void => {
-    if (Array.isArray(node)) return node.forEach(walk);
-    if (node && typeof node === 'object') {
-      const rec = node as Record<string, unknown>;
-      if (rec.tag === 'markdown' && typeof rec.content === 'string') out.push(rec.content);
-      Object.values(rec).forEach(walk);
-    }
-  };
-  walk(card);
-  return out;
-}
-
 function firstTopLevelText(card: object): string {
   const body = (card as { body?: { elements?: Array<Record<string, unknown>> } }).body;
   const first = body?.elements?.[0];

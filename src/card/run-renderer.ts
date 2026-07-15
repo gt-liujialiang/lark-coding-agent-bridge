@@ -62,10 +62,14 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
     elements.push(stopButton(options));
   }
 
+  return wrapCard(elements, state.terminal === 'running', state);
+}
+
+function wrapCard(elements: object[], streaming: boolean, state: RunState): object {
   return {
     schema: '2.0',
     config: {
-      streaming_mode: state.terminal === 'running',
+      streaming_mode: streaming,
       summary: { content: summaryText(state) },
     },
     body: { elements },
@@ -280,12 +284,5 @@ function renderConclusionFocusCard(
       elements.push(...renderToolGroup(group.tools, true));
     }
   }
-  return {
-    schema: '2.0',
-    config: {
-      streaming_mode: false,
-      summary: { content: summaryText(state) },
-    },
-    body: { elements },
-  };
+  return wrapCard(elements, false, state);
 }
