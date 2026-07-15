@@ -104,6 +104,11 @@ export interface AppPreferences {
    */
   showToolCalls?: boolean;
   /**
+   * 是否启用「结论聚焦」渲染：把 agent 正文里 `## 结论/根因/总结` 标记之后
+   * 的内容醒目置顶，其余过程/证据折叠进面板。默认 false，仅 card 模式生效。
+   */
+  conclusionFocus?: boolean;
+  /**
    * Whether the bot replies in-thread (starts/continues a 话题) in regular
    * (non-topic) group chats. Default true. Topic-mode groups always thread
    * regardless; p2p never threads. Set false to keep flat quoted replies.
@@ -205,6 +210,12 @@ export function getMessageReplyMode(cfg: AppConfig): MessageReplyMode {
 /** Resolve the show-tool-calls preference with default fallback. */
 export function getShowToolCalls(cfg: AppConfig): boolean {
   return cfg.preferences?.showToolCalls !== false;
+}
+
+/** Resolve the conclusion-focus preference. Default false — only the
+ * explicit `true` opts in, so older configs keep current rendering. */
+export function getConclusionFocus(cfg: AppConfig): boolean {
+  return cfg.preferences?.conclusionFocus === true;
 }
 
 /** Resolve the max-concurrent-runs preference with default + sanity clamp. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getReplyInThreadInGroup } from '../../../src/config/schema.js';
+import { getConclusionFocus, getReplyInThreadInGroup } from '../../../src/config/schema.js';
 import type { AppConfig } from '../../../src/config/schema.js';
 
 function cfgWith(replyInThreadInGroup: boolean | undefined): AppConfig {
@@ -20,5 +20,23 @@ describe('getReplyInThreadInGroup', () => {
 
   it('returns true when explicitly true', () => {
     expect(getReplyInThreadInGroup(cfgWith(true))).toBe(true);
+  });
+});
+
+function cfgWithConclusion(conclusionFocus: boolean | undefined): AppConfig {
+  return {
+    accounts: { app: { id: 'a', secret: 's', tenant: 'feishu' } },
+    preferences: conclusionFocus === undefined ? {} : { conclusionFocus },
+  } as AppConfig;
+}
+
+describe('getConclusionFocus', () => {
+  it('defaults to false when unset', () => {
+    expect(getConclusionFocus(cfgWithConclusion(undefined))).toBe(false);
+  });
+
+  it('returns true only when explicitly true', () => {
+    expect(getConclusionFocus(cfgWithConclusion(true))).toBe(true);
+    expect(getConclusionFocus(cfgWithConclusion(false))).toBe(false);
   });
 });
