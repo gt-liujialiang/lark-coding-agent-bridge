@@ -209,7 +209,7 @@ export function helpCard(agentName = 'Agent'): object {
   ]);
 }
 
-function escapeMd(s: string): string {
+export function escapeMd(s: string): string {
   return s.replace(/([*_`\\])/g, '\\$1');
 }
 

@@ -14,7 +14,7 @@ import {
 } from '../card/account-cards';
 import { configCancelledCard, configFailedCard, configFormCard, configSavedCard } from '../card/config-card';
 import { forgetManagedCard, sendManagedCard, updateManagedCard } from '../card/managed';
-import { helpCard, resumeCard, statusCard, workspacesCard } from '../card/templates';
+import { escapeMd, helpCard, resumeCard, statusCard, workspacesCard } from '../card/templates';
 import type { AppConfig, AppPreferences, MessageReplyMode, TenantBrand } from '../config/schema';
 import {
   getAgentStopGraceMs,
@@ -821,7 +821,8 @@ async function handleStats(_args: string, ctx: CommandContext): Promise<void> {
   }
   const total = users.length;
   const totalMessages = users.reduce((s, u) => s + u.messageCount, 0);
-  const label = (u: ActiveUserRecord): string => u.name ?? u.openId.slice(-6);
+  const label = (u: ActiveUserRecord): string =>
+    u.name ? escapeMd(u.name) : u.openId.slice(-6);
   const fmtTime = (iso: string): string => iso.slice(0, 16).replace('T', ' ');
   const topAskers = [...users]
     .sort((a, b) => b.messageCount - a.messageCount)
