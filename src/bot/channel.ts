@@ -562,26 +562,6 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     return;
   }
 
-  // 记录活跃用户台账(仅真人 + 真正触达 bot 的消息;失败不阻塞主流程)。
-  if (senderTypeOf(msg) === 'user') {
-    try {
-      const activeUsersFile = resolveAppPaths({
-        rootDir: dirname(controls.configPath),
-        profile: controls.profile,
-      }).activeUsersFile;
-      void recordActiveUser(activeUsersFile, {
-        openId: msg.senderId,
-        name: msg.senderName,
-        chatId: msg.chatId,
-        chatType: msg.chatType,
-      }).catch((err) =>
-        log.warn('intake', 'active-user-record-failed', { err: String(err) }),
-      );
-    } catch (err) {
-      log.warn('intake', 'active-user-record-failed', { err: String(err) });
-    }
-  }
-
   const handled = await tryHandleCommand({
     channel,
     msg,
@@ -608,6 +588,26 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     const dropped = pending.cancel(scope);
     log.info('intake', 'command', { scope, droppedPending: dropped.length });
     return;
+  }
+
+  // 记录活跃用户台账(仅真人 + 真正触达 bot 的消息;失败不阻塞主流程)。
+  if (senderTypeOf(msg) === 'user') {
+    try {
+      const activeUsersFile = resolveAppPaths({
+        rootDir: dirname(controls.configPath),
+        profile: controls.profile,
+      }).activeUsersFile;
+      void recordActiveUser(activeUsersFile, {
+        openId: msg.senderId,
+        name: msg.senderName,
+        chatId: msg.chatId,
+        chatType: msg.chatType,
+      }).catch((err) =>
+        log.warn('intake', 'active-user-record-failed', { err: String(err) }),
+      );
+    } catch (err) {
+      log.warn('intake', 'active-user-record-failed', { err: String(err) });
+    }
   }
 
   const size = pending.push(scope, msg);

@@ -191,6 +191,7 @@ export function helpCard(agentName = 'Agent'): object {
         '- `/timeout [N|off|default]` — 当前 session 的探活分钟数,`/config` 改全局默认',
         '- `/timeout comment:<scopeHash> N` — 管理员设置云文档评论任务探活',
         '- `/ps` — 列出本机所有 bot,标识当前正在回复的那个',
+        '- `/stats` — 查看活跃用户台账(管理员)',
         '- `/exit <id|#>` — 关掉指定 bot(用 `/ps` 看 id/序号)',
         '- `/reconnect` — 强制重连 WebSocket(网络抖动后 bot 没反应时用)',
         `- \`/doctor [描述]\` — 把日志和描述交给 ${escapedAgentName} 自助诊断`,
