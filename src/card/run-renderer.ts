@@ -3,6 +3,10 @@ import { toolBodyMd, toolHeaderText } from './tool-render';
 
 const REASONING_MAX = 1500;
 const COLLAPSE_TOOL_THRESHOLD = 3;
+const PROCESS_MAX = 3000;
+// 结论标记：行首 1-6 级标题，可带 ✅，标题词为 结论 / 根因 / 总结。
+// 全局 flag 供 matchAll 取最后一个匹配。
+const CONCLUSION_MARKER = /^#{1,6}\s*(?:✅\s*)?(?:结论|根因|总结)/gm;
 
 interface ToolGroup {
   kind: 'tools';
@@ -16,9 +20,16 @@ type Group = ToolGroup | TextGroup;
 
 export interface RunCardRenderOptions {
   signCallback?: (action: string) => string;
+  /** 开启后：run 结束且正文命中结论标记时，结论置顶、过程折叠。默认关闭。 */
+  conclusionFocus?: boolean;
 }
 
 export function renderCard(state: RunState, options: RunCardRenderOptions = {}): object {
+  if (options.conclusionFocus && state.terminal === 'done') {
+    const split = splitConclusion(state.blocks);
+    if (split) return renderConclusionFocusCard(state, split, options);
+  }
+
   const elements: object[] = [];
 
   if (state.reasoning.content) {
@@ -213,4 +224,68 @@ function summaryText(state: RunState): string {
 
 function truncate(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+interface ConclusionSplit {
+  conclusion: string;
+  process: string;
+}
+
+/**
+ * 把所有 text block 拼成完整正文，在最后一个结论标记处切开。
+ * 无 text / 无标记 → 返回 null（渲染器据此降级）。
+ */
+function splitConclusion(blocks: Block[]): ConclusionSplit | null {
+  const fullText = blocks
+    .filter((b): b is Extract<Block, { kind: 'text' }> => b.kind === 'text')
+    .map((b) => b.content)
+    .join('\n\n')
+    .trim();
+  if (!fullText) return null;
+  const matches = [...fullText.matchAll(CONCLUSION_MARKER)];
+  const last = matches[matches.length - 1];
+  if (!last || last.index === undefined) return null;
+  return {
+    conclusion: fullText.slice(last.index).trim(),
+    process: fullText.slice(0, last.index).trim(),
+  };
+}
+
+function renderConclusionFocusCard(
+  state: RunState,
+  split: ConclusionSplit,
+  _options: RunCardRenderOptions,
+): object {
+  const elements: object[] = [];
+  // 1. 结论置顶，普通 markdown，不截断。
+  elements.push(markdown(split.conclusion));
+  // 2. 过程文本折叠面板（可能为空）。
+  if (split.process) {
+    elements.push(
+      collapsiblePanel({
+        title: '🔍 **排查过程与证据（点击展开）**',
+        expanded: false,
+        border: 'blue',
+        body: truncate(split.process, PROCESS_MAX),
+      }),
+    );
+  }
+  // 3. 思考面板折叠。
+  if (state.reasoning.content) {
+    elements.push(reasoningPanel(state.reasoning.content, false));
+  }
+  // 4. 工具调用组折叠（finalized）。
+  for (const group of groupBlocks(state.blocks)) {
+    if (group.kind === 'tools') {
+      elements.push(...renderToolGroup(group.tools, true));
+    }
+  }
+  return {
+    schema: '2.0',
+    config: {
+      streaming_mode: false,
+      summary: { content: summaryText(state) },
+    },
+    body: { elements },
+  };
 }
