@@ -5,6 +5,7 @@ import type { MessageReplyMode } from '../config/schema';
 export interface ConfigFormOpts {
   messageReply: MessageReplyMode;
   showToolCalls: boolean;
+  conclusionFocus: boolean;
   maxConcurrentRuns: number;
   /** 0 means "disabled". */
   runIdleTimeoutMinutes: number;
@@ -137,6 +138,23 @@ export function configFormCard(opts: ConfigFormOpts): object {
               options: [
                 { text: { tag: 'plain_text', content: '显示(默认)' }, value: 'show' },
                 { text: { tag: 'plain_text', content: '隐藏' }, value: 'hide' },
+              ],
+            },
+            {
+              tag: 'markdown',
+              content:
+                '\n**推理过程折叠 · 结论聚焦**\n' +
+                '_开:排查/调查类回答里,结论醒目置顶,过程与证据折叠进面板_\n' +
+                '_关(默认):按原样平铺展示全部内容_\n' +
+                '_需要 agent 在正文用 `## 结论`/`根因` 标记结论才会生效,否则自动按原样展示_',
+            },
+            {
+              tag: 'select_static',
+              name: 'conclusion_focus',
+              initial_option: opts.conclusionFocus ? 'on' : 'off',
+              options: [
+                { text: { tag: 'plain_text', content: '关(默认)' }, value: 'off' },
+                { text: { tag: 'plain_text', content: '开' }, value: 'on' },
               ],
             },
             {
@@ -279,6 +297,7 @@ export function configSavedCard(opts: ConfigFormOpts): object {
             '✅ **偏好已保存**\n\n' +
             `**消息回复方式**:${replyLabel}\n` +
             `**工具调用显示**:\`${opts.showToolCalls ? 'show' : 'hide'}\`\n` +
+            `**结论聚焦**:\`${opts.conclusionFocus ? 'on' : 'off'}\`\n` +
             `**并发上限**:\`${opts.maxConcurrentRuns}\`\n` +
             `**run 探活**:\`${opts.runIdleTimeoutMinutes > 0 ? `${opts.runIdleTimeoutMinutes} 分钟` : '关闭'}\`\n` +
             `**群里需要 @ bot**:\`${opts.requireMentionInGroup ? '是' : '否'}\`\n` +

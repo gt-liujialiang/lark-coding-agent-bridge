@@ -18,6 +18,7 @@ import { helpCard, resumeCard, statusCard, workspacesCard } from '../card/templa
 import type { AppConfig, AppPreferences, MessageReplyMode, TenantBrand } from '../config/schema';
 import {
   getAgentStopGraceMs,
+  getConclusionFocus,
   getMaxConcurrentRuns,
   getMessageReplyMode,
   getReplyInThreadInGroup,
@@ -1745,6 +1746,7 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
   const card = configFormCard({
     messageReply: getMessageReplyMode(ctx.controls.cfg),
     showToolCalls: getShowToolCalls(ctx.controls.cfg),
+    conclusionFocus: getConclusionFocus(ctx.controls.cfg),
     maxConcurrentRuns: getMaxConcurrentRuns(ctx.controls.cfg),
     runIdleTimeoutMinutes: ms ? Math.round(ms / 60_000) : 0,
     requireMentionInGroup: getRequireMentionInGroup(ctx.controls.cfg),
@@ -1796,6 +1798,12 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       : 'card';
   const rawTools = String(fv.show_tool_calls ?? '').trim();
   const showToolCalls = rawTools !== 'hide';
+  // Parse conclusion_focus. Empty / unexpected keeps current value.
+  const rawConclusion = String(fv.conclusion_focus ?? '').trim();
+  let conclusionFocus: boolean;
+  if (rawConclusion === 'on') conclusionFocus = true;
+  else if (rawConclusion === 'off') conclusionFocus = false;
+  else conclusionFocus = getConclusionFocus(ctx.controls.cfg);
   // Parse max_concurrent_runs; invalid input falls back to current value.
   const rawMaxCC = String(fv.max_concurrent_runs ?? '').trim();
   const parsedMaxCC = Number(rawMaxCC);
@@ -1865,6 +1873,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       // explicitly picks any option gets out of the legacy-coerce path.
       messageReplyMigrated: true,
       showToolCalls,
+      conclusionFocus,
       maxConcurrentRuns,
       runIdleTimeoutMinutes,
       requireMentionInGroup,
@@ -1910,6 +1919,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
     log.info('command', 'config-saved', {
       messageReply,
       showToolCalls,
+      conclusionFocus,
       maxConcurrentRuns,
       runIdleTimeoutMinutes,
       requireMentionInGroup,
@@ -1926,6 +1936,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       configSavedCard({
         messageReply,
         showToolCalls,
+        conclusionFocus,
         maxConcurrentRuns,
         runIdleTimeoutMinutes,
         requireMentionInGroup,
