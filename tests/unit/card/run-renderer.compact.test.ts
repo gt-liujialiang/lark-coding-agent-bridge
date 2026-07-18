@@ -42,6 +42,21 @@ describe('compact card renderer', () => {
     ).toMatchSnapshot();
   });
 
+  it('thinking after a finished tool shows a 上一步 line with that tool', () => {
+    const state = stateFrom([
+      { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'grep err app.log' } },
+      { type: 'tool_result', id: 't1', output: 'found 3', isError: false },
+      { type: 'thinking', delta: 'analysing' },
+    ]);
+    const card = renderCard(state, { style: 'compact', elapsedMs: 90_000 }) as {
+      body: { elements: { content?: string }[] };
+    };
+    const statusLine = card.body.elements[0]?.content ?? '';
+    expect(statusLine).toContain('🧠 正在思考…（已运行 1 分 30 秒 · 已完成 1 次工具调用）');
+    expect(statusLine).toContain('\n上一步：');
+    expect(statusLine).toContain('Bash');
+  });
+
   it('running status line appends elapsed time and completed tool count', () => {
     const state = stateFrom([
       { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } },

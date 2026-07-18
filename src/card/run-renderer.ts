@@ -1,4 +1,4 @@
-import type { Block, FooterStatus, RunState, ToolEntry } from './run-state';
+import type { Block, FooterStatus, RunState, ToolEntry, ToolStatus } from './run-state';
 import { toolBodyMd, toolHeaderText } from './tool-render';
 
 const REASONING_MAX = 1500;
@@ -143,18 +143,25 @@ function renderCompactCard(state: RunState, options: RunCardRenderOptions): obje
 const PROGRESS_SUFFIX_MIN_MS = 10_000;
 
 function compactStatusLine(state: RunState, elapsedMs?: number): string {
-  return `${compactStatusBase(state)}${compactProgressSuffix(state, elapsedMs)}`;
+  const suffix = compactProgressSuffix(state, elapsedMs);
+  const running = latestTool(state, 'running');
+  if (running) return `${toolHeaderText(running)}${suffix}`;
+  const base = state.footer === 'streaming' ? '✍️ 正在输出…' : '🧠 正在思考…';
+  // 思考间隙占了长任务大部分墙钟时间，带上最近完成的工具，
+  // 让「正在思考」的读者知道刚才干到哪一步了。
+  const last = latestTool(state);
+  const lastLine = last ? `\n上一步：${toolHeaderText(last)}` : '';
+  return `${base}${suffix}${lastLine}`;
 }
 
-function compactStatusBase(state: RunState): string {
+function latestTool(state: RunState, status?: ToolStatus): ToolEntry | undefined {
   for (let i = state.blocks.length - 1; i >= 0; i--) {
     const b = state.blocks[i];
-    if (b && b.kind === 'tool' && b.tool.status === 'running') {
-      return toolHeaderText(b.tool);
+    if (b && b.kind === 'tool' && (status === undefined || b.tool.status === status)) {
+      return b.tool;
     }
   }
-  if (state.footer === 'streaming') return '✍️ 正在输出…';
-  return '🧠 正在思考…';
+  return undefined;
 }
 
 function compactProgressSuffix(state: RunState, elapsedMs?: number): string {
