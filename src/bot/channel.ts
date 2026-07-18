@@ -74,6 +74,11 @@ import type { AppPaths } from '../config/app-paths';
 
 const DEBOUNCE_MS = 600;
 const STREAM_TERMINAL_GRACE_MS = 3000;
+// compact 卡片在 run 结束后还要跑一次 summarizeReply（内部超时 15s）再补一次
+// 卡片更新，producer（因此 streamDone）要等这两步完成才 settle。终态宽限期
+// 必须覆盖 15s 摘要超时 + 卡片补丁的 API 往返，否则默认 3s 宽限必然过期，
+// 摘要更新沦为 fire-and-forget（失败时卡片永远停在 ⏳ 占位）。
+const COMPACT_SUMMARY_GRACE_MS = 20_000;
 const REACTION_CLEANUP_GRACE_MS = 1000;
 
 const BRIDGE_AGENT_INSTRUCTIONS = [
@@ -176,6 +181,8 @@ export interface StartChannelDeps {
   workspaces: WorkspaceStore;
   controls: Controls;
   appPaths?: Pick<AppPaths, 'secretsFile' | 'keystoreSaltFile' | 'mediaDir'>;
+  /** Injectable for tests; defaults to the real haiku-backed summarizer. */
+  summarize?: typeof summarizeReply;
 }
 
 export async function startChannel(deps: StartChannelDeps): Promise<BridgeChannel> {
@@ -276,6 +283,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
           activePolicyFingerprints,
           scope,
           mode,
+          summarize: deps.summarize,
         });
       } catch (err) {
         log.fail('flush', err);
@@ -612,6 +620,8 @@ interface RunBatchDeps {
   activePolicyFingerprints: Map<string, string>;
   scope: string;
   mode: ChatMode;
+  /** Injectable for tests; defaults to the real haiku-backed summarizer. */
+  summarize?: typeof summarizeReply;
 }
 
 async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
@@ -628,6 +638,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     activePolicyFingerprints,
     scope,
     mode,
+    summarize = summarizeReply,
   } = deps;
   if (batch.length === 0) return;
   const firstMsg = batch[0];
@@ -812,7 +823,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     if (cardStyle !== 'compact' || state.terminal !== 'done') return undefined;
     const text = finalReplyText(state);
     if (text.length < SHORT_REPLY_MAX) return undefined;
-    return summarizeReply(text);
+    return summarize(text);
   };
 
   // For non-card modes Claude's output doesn't surface visually until either
@@ -854,12 +865,18 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
               await renderDone;
               // compact：run 结束时卡片已显示「⏳ 正在生成总结…」占位，这里
               // 生成真总结再补一次更新。摘要失败/超时在 summarizeReply 内部
-              // 兜底为首句，这里不会 throw。
+              // 兜底为首句，不会 throw；剩下的风险是卡片补丁本身的 API 调用，
+              // 用 try/catch 兜住，避免让 producer / streamDone reject。
               const summary = await compactSummaryFor(filterForPrefs(latestState));
               if (summary !== undefined) {
-                await ctrl.update(
-                  renderCard(filterForPrefs(latestState), { ...cardRenderOptions, summary }),
-                );
+                try {
+                  await ctrl.update(
+                    renderCard(filterForPrefs(latestState), { ...cardRenderOptions, summary }),
+                  );
+                  log.info('card', 'summary-applied', { scope });
+                } catch (err) {
+                  log.fail('card', err, { step: 'compact-summary-update' });
+                }
               }
             },
           },
@@ -871,6 +888,10 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         streamDone,
         renderDone,
         producerStarted: () => producerStarted,
+        // compact 的 producer 在 renderDone 之后还要等摘要子进程 + 卡片补丁，
+        // 默认 3s 宽限必然不够，放大到覆盖 summarizeReply 的 15s 超时。
+        terminalGraceMs:
+          cardStyle === 'compact' ? COMPACT_SUMMARY_GRACE_MS : STREAM_TERMINAL_GRACE_MS,
         fallback: async (state) => {
           const filtered = filterForPrefs(state);
           const summary = await compactSummaryFor(filtered);
@@ -1076,6 +1097,10 @@ async function awaitRenderAwareStream(input: {
   renderDone: Promise<RunState>;
   producerStarted: () => boolean;
   fallback: (state: RunState) => Promise<void>;
+  /** Grace to wait for streamDone after renderDone; callers whose producer
+   * does post-render work (compact summary patch) must pass a window that
+   * covers it. Defaults to STREAM_TERMINAL_GRACE_MS. */
+  terminalGraceMs?: number;
 }): Promise<void> {
   const streamResult = input.streamDone.then(
     () => ({ kind: 'stream' as const, ok: true as const }),
@@ -1109,14 +1134,15 @@ async function awaitRenderAwareStream(input: {
     return;
   }
 
+  const graceMs = input.terminalGraceMs ?? STREAM_TERMINAL_GRACE_MS;
   const terminal = await Promise.race([
     streamResult,
-    delay(STREAM_TERMINAL_GRACE_MS).then(() => undefined),
+    delay(graceMs).then(() => undefined),
   ]);
   if (!terminal) {
     log.warn('stream', 'terminal-grace-expired', {
       mode: input.mode,
-      graceMs: STREAM_TERMINAL_GRACE_MS,
+      graceMs,
     });
     void streamResult.then((result) => {
       if (!result.ok) {
