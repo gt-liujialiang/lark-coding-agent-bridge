@@ -75,6 +75,20 @@ describe('compact card renderer', () => {
     ).toMatchSnapshot();
   });
 
+  it('truncates the detail panel body at DETAIL_MAX (20000 chars + ellipsis)', () => {
+    const state = stateFrom([
+      { type: 'text', delta: 'x'.repeat(25_000) },
+      { type: 'done', terminationReason: 'normal' },
+    ]);
+    const card = renderCard(state, { style: 'compact' }) as {
+      body: { elements: Array<{ tag?: string; elements?: Array<{ content?: string }> }> };
+    };
+    const detailPanel = card.body.elements.find((el) => el.tag === 'collapsible_panel');
+    const body = detailPanel?.elements?.[0]?.content ?? '';
+    expect(body.length).toBe(20_001);
+    expect(body.endsWith('…')).toBe(true);
+  });
+
   it('finalReplyText concatenates text blocks only', () => {
     const state = stateFrom([
       { type: 'text', delta: 'part one' },

@@ -52,13 +52,9 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
     }
   }
 
-  if (state.terminal === 'interrupted') {
-    elements.push(noteMd('_⏹ 已被中断_'));
-  } else if (state.terminal === 'idle_timeout') {
-    const mins = state.idleTimeoutMinutes ?? 0;
-    elements.push(noteMd(`_⏱ ${mins} 分钟无响应,已自动终止_`));
-  } else if (state.terminal === 'error' && state.errorMsg) {
-    elements.push(noteMd(`⚠️ agent 失败：${state.errorMsg}`));
+  const abnormalNote = abnormalStatusNote(state);
+  if (abnormalNote) {
+    elements.push(abnormalNote);
   } else if (state.terminal === 'done' && elements.length === 0) {
     elements.push(noteMd('_（未返回内容）_'));
   }
@@ -78,6 +74,19 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
   };
 }
 
+/** Note element for abnormal terminal states, or null for done/running. */
+function abnormalStatusNote(state: RunState): object | null {
+  if (state.terminal === 'interrupted') return noteMd('_⏹ 已被中断_');
+  if (state.terminal === 'idle_timeout') {
+    const mins = state.idleTimeoutMinutes ?? 0;
+    return noteMd(`_⏱ ${mins} 分钟无响应,已自动终止_`);
+  }
+  if (state.terminal === 'error' && state.errorMsg) {
+    return noteMd(`⚠️ agent 失败：${state.errorMsg}`);
+  }
+  return null;
+}
+
 function renderCompactCard(state: RunState, options: RunCardRenderOptions): object {
   const elements: object[] = [];
 
@@ -89,13 +98,9 @@ function renderCompactCard(state: RunState, options: RunCardRenderOptions): obje
 
   const text = finalReplyText(state);
 
-  if (state.terminal === 'interrupted') {
-    elements.push(noteMd('_⏹ 已被中断_'));
-  } else if (state.terminal === 'idle_timeout') {
-    const mins = state.idleTimeoutMinutes ?? 0;
-    elements.push(noteMd(`_⏱ ${mins} 分钟无响应,已自动终止_`));
-  } else if (state.terminal === 'error' && state.errorMsg) {
-    elements.push(noteMd(`⚠️ agent 失败：${state.errorMsg}`));
+  const abnormalNote = abnormalStatusNote(state);
+  if (abnormalNote) {
+    elements.push(abnormalNote);
   } else if (state.terminal === 'done') {
     if (!text) {
       elements.push(noteMd('_（未返回内容）_'));
