@@ -22,6 +22,8 @@ export interface RunCardRenderOptions {
   style?: 'streaming' | 'compact';
   /** compact 专用：结束后的一句话结论。undefined = 总结生成中（显示 ⏳ 占位）。 */
   summary?: string;
+  /** compact 专用：运行中状态行的已运行时长（ms）。缺省或不足 10s 不显示进度后缀。 */
+  elapsedMs?: number;
 }
 
 /** All text-block content joined — the agent's final reply, tools excluded. */
@@ -91,7 +93,7 @@ function renderCompactCard(state: RunState, options: RunCardRenderOptions): obje
   const elements: object[] = [];
 
   if (state.terminal === 'running') {
-    elements.push(noteMd(compactStatusLine(state)));
+    elements.push(noteMd(compactStatusLine(state, options.elapsedMs)));
     elements.push(stopButton(options));
     return compactShell(state, elements);
   }
@@ -135,7 +137,16 @@ function renderCompactCard(state: RunState, options: RunCardRenderOptions): obje
   return compactShell(state, elements);
 }
 
-function compactStatusLine(state: RunState): string {
+// 长任务大部分墙钟时间是模型思考，状态行会长时间停在「🧠 正在思考…」，
+// 容易被误读为卡死。追加已运行时长和工具进度作为「还活着」的信号；
+// 前 10 秒不显示，避免短任务闪一条无意义的「已运行 0 秒」。
+const PROGRESS_SUFFIX_MIN_MS = 10_000;
+
+function compactStatusLine(state: RunState, elapsedMs?: number): string {
+  return `${compactStatusBase(state)}${compactProgressSuffix(state, elapsedMs)}`;
+}
+
+function compactStatusBase(state: RunState): string {
   for (let i = state.blocks.length - 1; i >= 0; i--) {
     const b = state.blocks[i];
     if (b && b.kind === 'tool' && b.tool.status === 'running') {
@@ -144,6 +155,24 @@ function compactStatusLine(state: RunState): string {
   }
   if (state.footer === 'streaming') return '✍️ 正在输出…';
   return '🧠 正在思考…';
+}
+
+function compactProgressSuffix(state: RunState, elapsedMs?: number): string {
+  if (elapsedMs === undefined || elapsedMs < PROGRESS_SUFFIX_MIN_MS) return '';
+  const parts = [`已运行 ${formatElapsed(elapsedMs)}`];
+  const doneTools = state.blocks.filter(
+    (b) => b.kind === 'tool' && b.tool.status !== 'running',
+  ).length;
+  if (doneTools > 0) parts.push(`已完成 ${doneTools} 次工具调用`);
+  return `（${parts.join(' · ')}）`;
+}
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (min === 0) return `${sec} 秒`;
+  return sec === 0 ? `${min} 分` : `${min} 分 ${sec} 秒`;
 }
 
 function compactShell(state: RunState, elements: object[]): object {

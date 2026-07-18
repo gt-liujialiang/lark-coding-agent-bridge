@@ -42,6 +42,33 @@ describe('compact card renderer', () => {
     ).toMatchSnapshot();
   });
 
+  it('running status line appends elapsed time and completed tool count', () => {
+    const state = stateFrom([
+      { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } },
+      { type: 'tool_result', id: 't1', output: 'ok', isError: false },
+      { type: 'thinking', delta: 'next step' },
+    ]);
+    expect(
+      normalizeCard(renderCard(state, { style: 'compact', elapsedMs: 252_000 })),
+    ).toMatchSnapshot();
+    // 无已完成工具时只显示时长
+    expect(
+      normalizeCard(
+        renderCard(stateFrom([{ type: 'thinking', delta: 'x' }]), {
+          style: 'compact',
+          elapsedMs: 45_000,
+        }),
+      ),
+    ).toMatchSnapshot();
+  });
+
+  it('suppresses the progress suffix under 10s or when elapsedMs is absent', () => {
+    const state = stateFrom([{ type: 'thinking', delta: 'x' }]);
+    const early = renderCard(state, { style: 'compact', elapsedMs: 3_000 });
+    const none = renderCard(state, { style: 'compact' });
+    expect(normalizeCard(early)).toEqual(normalizeCard(none));
+  });
+
   it('done with long text shows summary placeholder then real summary', () => {
     const state = stateFrom([
       { type: 'thinking', delta: 'root cause hunt' },

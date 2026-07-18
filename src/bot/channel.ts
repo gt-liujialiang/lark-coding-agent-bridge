@@ -840,6 +840,12 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       let cardCtrl:
         | { update(next: object | ((current: object) => object)): Promise<void> }
         | undefined;
+      // compact 状态行的「已运行 X · 已完成 N 次工具调用」进度后缀基准点。
+      const runStartedAt = Date.now();
+      const optionsNow = (): RunCardRenderOptions => ({
+        ...cardRenderOptions,
+        elapsedMs: Date.now() - runStartedAt,
+      });
       const renderDone = processAgentStream(
         handle,
         eventStream,
@@ -849,7 +855,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         async (state) => {
           latestState = state;
           if (cardCtrl) {
-            await cardCtrl.update(renderCard(filterForPrefs(state), cardRenderOptions));
+            await cardCtrl.update(renderCard(filterForPrefs(state), optionsNow()));
           }
         },
       );
@@ -861,7 +867,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             producer: async (ctrl) => {
               producerStarted = true;
               cardCtrl = ctrl;
-              await ctrl.update(renderCard(filterForPrefs(latestState), cardRenderOptions));
+              await ctrl.update(renderCard(filterForPrefs(latestState), optionsNow()));
               await renderDone;
               // compact：run 结束时卡片已显示「⏳ 正在生成总结…」占位，这里
               // 生成真总结再补一次更新。摘要失败/超时在 summarizeReply 内部
