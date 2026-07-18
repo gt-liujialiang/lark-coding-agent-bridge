@@ -43,10 +43,12 @@ export async function summarizeReply(
   const spawn = opts.spawn ?? spawnProcess;
   const input = text.length > INPUT_MAX ? text.slice(0, INPUT_MAX) : text;
   try {
+    // --max-turns 1: 总结是单轮纯文本任务，禁止 agentic 工具循环——
+    // 否则模型对任意回复文本可能尝试调工具，白白烧满 15s 再走兜底。
     const raw = await runOnce(
       spawn,
       binary,
-      ['-p', SUMMARY_PROMPT, '--model', model],
+      ['-p', SUMMARY_PROMPT, '--model', model, '--max-turns', '1'],
       input,
       timeoutMs,
     );
