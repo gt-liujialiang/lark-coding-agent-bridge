@@ -69,6 +69,15 @@ export interface SecretsConfig {
 export type MessageReplyMode = 'card' | 'markdown' | 'text';
 
 /**
+ * Card presentation style. `auto` lets `resolveCardStyle` pick per chat
+ * mode; `streaming` / `compact` force one behavior everywhere. See
+ * `AppPreferences.cardStyle` for the full semantics.
+ */
+export type CardStyle = 'auto' | 'streaming' | 'compact';
+/** The two concrete styles a renderer actually has to implement. */
+export type ResolvedCardStyle = 'streaming' | 'compact';
+
+/**
  * Access control settings. Empty lists are fail-closed in the v2 policy:
  * no DM senders, no group chats, and only the runtime owner can administer
  * the bot. Runtime owner/admin bypass is applied by the policy layer because
@@ -143,6 +152,14 @@ export interface AppPreferences {
    * Range 100-30000; out-of-range values fall back to default.
    */
   agentStopGraceMs?: number;
+  /**
+   * 卡片呈现风格。`auto`（默认）：群/话题群用 compact（运行中只显示状态行，
+   * 结束后一句话结论 + 折叠详情），p2p 保持 streaming（现状）。
+   * `streaming` / `compact` 对所有聊天强制统一。
+   * compact 生效时强制走交互卡片管线（messageReply 被覆盖为 card 行为），
+   * 因为折叠面板只有交互卡片支持。
+   */
+  cardStyle?: CardStyle;
 }
 
 /**
@@ -266,4 +283,24 @@ export function getRunIdleTimeoutMs(cfg: AppConfig): number | undefined {
   if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return undefined;
   const clamped = Math.min(Math.max(Math.floor(raw), 1), 120);
   return clamped * 60_000;
+}
+
+/** Raw 3-state cardStyle preference, default 'auto'. For the /config form. */
+export function getCardStylePref(cfg: AppConfig): CardStyle {
+  const raw = cfg.preferences?.cardStyle;
+  return raw === 'streaming' || raw === 'compact' || raw === 'auto' ? raw : 'auto';
+}
+
+/**
+ * Resolve the effective card style for one chat. `auto` maps group & topic
+ * chats to compact (business-triage groups want conclusion-first cards) and
+ * p2p to streaming (watching the run live is useful in 1:1).
+ */
+export function resolveCardStyle(
+  cfg: AppConfig,
+  chatMode: 'p2p' | 'group' | 'topic',
+): ResolvedCardStyle {
+  const raw = getCardStylePref(cfg);
+  if (raw === 'streaming' || raw === 'compact') return raw;
+  return chatMode === 'p2p' ? 'streaming' : 'compact';
 }
