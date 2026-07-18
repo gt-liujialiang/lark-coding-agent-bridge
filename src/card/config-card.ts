@@ -1,6 +1,6 @@
 import type { KnownChat } from '../bot/lark-info';
 import type { LarkCliIdentityPreset } from '../config/profile-schema';
-import type { MessageReplyMode } from '../config/schema';
+import type { CardStyle, MessageReplyMode } from '../config/schema';
 
 export interface ConfigFormOpts {
   messageReply: MessageReplyMode;
@@ -10,6 +10,7 @@ export interface ConfigFormOpts {
   runIdleTimeoutMinutes: number;
   requireMentionInGroup: boolean;
   replyInThreadInGroup: boolean;
+  cardStyle: CardStyle;
   larkCliIdentity: LarkCliIdentityPreset;
   allowedUsers: string[];
   allowedChats: string[];
@@ -204,6 +205,24 @@ export function configFormCard(opts: ConfigFormOpts): object {
             {
               tag: 'markdown',
               content:
+                '\n**卡片呈现风格**\n' +
+                '_自动(默认):群聊用「状态栏+一句话结论+折叠详情」的紧凑卡片,私聊保持流式_\n' +
+                '_流式:所有聊天实时输出思考/正文/工具过程(原行为)_\n' +
+                '_紧凑:所有聊天都用紧凑卡片;运行中只显示状态,结束后展示结论,详情折叠_',
+            },
+            {
+              tag: 'select_static',
+              name: 'card_style',
+              initial_option: opts.cardStyle,
+              options: [
+                { text: { tag: 'plain_text', content: '自动(默认)' }, value: 'auto' },
+                { text: { tag: 'plain_text', content: '流式' }, value: 'streaming' },
+                { text: { tag: 'plain_text', content: '紧凑' }, value: 'compact' },
+              ],
+            },
+            {
+              tag: 'markdown',
+              content:
                 '\n**lark-cli 身份策略**\n' +
                 '_只允许应用身份:使用 bot/app 能力,不访问个人资源_\n' +
                 '_允许用户身份:保留应用身份,并允许已授权用户访问个人日历、邮箱、云盘等资源_',
@@ -282,7 +301,8 @@ export function configSavedCard(opts: ConfigFormOpts): object {
             `**并发上限**:\`${opts.maxConcurrentRuns}\`\n` +
             `**run 探活**:\`${opts.runIdleTimeoutMinutes > 0 ? `${opts.runIdleTimeoutMinutes} 分钟` : '关闭'}\`\n` +
             `**群里需要 @ bot**:\`${opts.requireMentionInGroup ? '是' : '否'}\`\n` +
-            `**群聊话题回复**:\`${opts.replyInThreadInGroup ? '是' : '否'}\`\n\n` +
+            `**群聊话题回复**:\`${opts.replyInThreadInGroup ? '是' : '否'}\`\n` +
+            `**卡片呈现风格**:\`${opts.cardStyle === 'auto' ? '自动' : opts.cardStyle === 'compact' ? '紧凑' : '流式'}\`\n\n` +
             `**lark-cli 身份策略**:\`${opts.larkCliIdentity === 'user-default' ? '允许用户身份' : '只允许应用身份'}\`\n\n` +
             '🔒 **访问控制**\n' +
             `**允许私聊的用户**:${summarize(opts.allowedUsers)}\n` +

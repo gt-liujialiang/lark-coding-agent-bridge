@@ -15,9 +15,10 @@ import {
 import { configCancelledCard, configFailedCard, configFormCard, configSavedCard } from '../card/config-card';
 import { forgetManagedCard, sendManagedCard, updateManagedCard } from '../card/managed';
 import { helpCard, resumeCard, statusCard, workspacesCard } from '../card/templates';
-import type { AppConfig, AppPreferences, MessageReplyMode, TenantBrand } from '../config/schema';
+import type { AppConfig, AppPreferences, CardStyle, MessageReplyMode, TenantBrand } from '../config/schema';
 import {
   getAgentStopGraceMs,
+  getCardStylePref,
   getMaxConcurrentRuns,
   getMessageReplyMode,
   getReplyInThreadInGroup,
@@ -1749,6 +1750,7 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
     runIdleTimeoutMinutes: ms ? Math.round(ms / 60_000) : 0,
     requireMentionInGroup: getRequireMentionInGroup(ctx.controls.cfg),
     replyInThreadInGroup: getReplyInThreadInGroup(ctx.controls.cfg),
+    cardStyle: getCardStylePref(ctx.controls.cfg),
     larkCliIdentity: ctx.controls.profileConfig.larkCli.identityPreset,
     allowedUsers: access.allowedUsers,
     allowedChats: access.allowedChats,
@@ -1833,6 +1835,12 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
   if (rawReplyInThread === 'yes') replyInThreadInGroup = true;
   else if (rawReplyInThread === 'no') replyInThreadInGroup = false;
   else replyInThreadInGroup = getReplyInThreadInGroup(ctx.controls.cfg);
+  // Parse card_style. Empty / unexpected keeps current.
+  const rawCardStyle = String(fv.card_style ?? '').trim();
+  const cardStyle: CardStyle =
+    rawCardStyle === 'auto' || rawCardStyle === 'streaming' || rawCardStyle === 'compact'
+      ? rawCardStyle
+      : getCardStylePref(ctx.controls.cfg);
   const rawLarkCliIdentity = String(fv.lark_cli_identity ?? '').trim();
   const larkCliIdentity =
     rawLarkCliIdentity === 'user-default' || rawLarkCliIdentity === 'bot-only'
@@ -1869,6 +1877,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       runIdleTimeoutMinutes,
       requireMentionInGroup,
       replyInThreadInGroup,
+      cardStyle,
     };
 
     let failureStep = 'config.save';
@@ -1914,6 +1923,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       runIdleTimeoutMinutes,
       requireMentionInGroup,
       replyInThreadInGroup,
+      cardStyle,
       larkCliIdentity,
       allowedUsersCount: access.allowedUsers.length,
       allowedChatsCount: access.allowedChats.length,
@@ -1930,6 +1940,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
         runIdleTimeoutMinutes,
         requireMentionInGroup,
         replyInThreadInGroup,
+        cardStyle,
         larkCliIdentity,
         allowedUsers: access.allowedUsers,
         allowedChats: access.allowedChats,
