@@ -12,11 +12,17 @@ import {
   type BridgePromptMention,
   type BridgePromptQuotedMessage,
 } from '../agent/prompt';
+import { summarizeReply } from '../agent/summarize';
 import type { AgentAdapter, AgentEvent } from '../agent/types';
 import { handleCardAction } from '../card/dispatcher';
 import { CallbackAuth } from '../card/callback-auth';
 import { CallbackNonceStore } from '../card/callback-store';
-import { renderCard } from '../card/run-renderer';
+import {
+  finalReplyText,
+  renderCard,
+  SHORT_REPLY_MAX,
+  type RunCardRenderOptions,
+} from '../card/run-renderer';
 import {
   finalizeIfRunning,
   initialState,
@@ -36,6 +42,7 @@ import {
   getReplyInThreadInGroup,
   getRunIdleTimeoutMs,
   getShowToolCalls,
+  resolveCardStyle,
 } from '../config/schema';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { log, reportMetric, withTrace } from '../core/logger';
@@ -770,8 +777,11 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     log.info('flush', 'idle-watchdog', { idleTimeoutMs });
   }
 
-  const replyMode = getMessageReplyMode(controls.cfg);
-  log.info('flush', 'reply-mode', { mode: replyMode });
+  // compact 只能在交互卡片管线上实现（折叠面板），所以 compact 生效时
+  // 覆盖 messageReply；streaming 维持用户配置的 messageReply 行为。
+  const cardStyle = resolveCardStyle(controls.cfg, mode);
+  const replyMode = cardStyle === 'compact' ? 'card' : getMessageReplyMode(controls.cfg);
+  log.info('flush', 'reply-mode', { mode: replyMode, cardStyle });
 
   // Re-read prefs on every flush so toggling /config mid-stream takes
   // effect immediately. Cheap object lookups, no allocation when on.
@@ -779,20 +789,31 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     if (getShowToolCalls(controls.cfg)) return state;
     return { ...state, blocks: state.blocks.filter((b) => b.kind !== 'tool') };
   };
-  const cardRenderOptions = callbackAuth
-    ? {
-        signCallback: (action: string) =>
-          callbackAuth.sign({
-            runId: execution.runId,
-            scope,
-            chatId,
-            operatorOpenId: firstMsg.senderId,
-            action,
-            policyFingerprint: flow.policy.policyFingerprint,
-            ttlMs: 24 * 60 * 60 * 1000,
-          }),
-      }
-    : {};
+  const cardRenderOptions: RunCardRenderOptions = {
+    style: cardStyle,
+    ...(callbackAuth
+      ? {
+          signCallback: (action: string) =>
+            callbackAuth.sign({
+              runId: execution.runId,
+              scope,
+              chatId,
+              operatorOpenId: firstMsg.senderId,
+              action,
+              policyFingerprint: flow.policy.policyFingerprint,
+              ttlMs: 24 * 60 * 60 * 1000,
+            }),
+        }
+      : {}),
+  };
+
+  // 返回 undefined = 此 run 不需要总结（非 compact / 异常结束 / 短回复）。
+  const compactSummaryFor = async (state: RunState): Promise<string | undefined> => {
+    if (cardStyle !== 'compact' || state.terminal !== 'done') return undefined;
+    const text = finalReplyText(state);
+    if (text.length < SHORT_REPLY_MAX) return undefined;
+    return summarizeReply(text);
+  };
 
   // For non-card modes Claude's output doesn't surface visually until either
   // a first streamed token (markdown mode) or the whole run ends (text mode).
@@ -831,6 +852,15 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
               cardCtrl = ctrl;
               await ctrl.update(renderCard(filterForPrefs(latestState), cardRenderOptions));
               await renderDone;
+              // compact：run 结束时卡片已显示「⏳ 正在生成总结…」占位，这里
+              // 生成真总结再补一次更新。摘要失败/超时在 summarizeReply 内部
+              // 兜底为首句，这里不会 throw。
+              const summary = await compactSummaryFor(filterForPrefs(latestState));
+              if (summary !== undefined) {
+                await ctrl.update(
+                  renderCard(filterForPrefs(latestState), { ...cardRenderOptions, summary }),
+                );
+              }
             },
           },
         },
@@ -842,11 +872,11 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         renderDone,
         producerStarted: () => producerStarted,
         fallback: async (state) => {
-          await channel.send(
-            chatId,
-            { card: renderCard(filterForPrefs(state), cardRenderOptions) },
-            sendOpts,
-          );
+          const filtered = filterForPrefs(state);
+          const summary = await compactSummaryFor(filtered);
+          const opts2 =
+            summary !== undefined ? { ...cardRenderOptions, summary } : cardRenderOptions;
+          await channel.send(chatId, { card: renderCard(filtered, opts2) }, sendOpts);
         },
       });
     } else if (replyMode === 'markdown') {

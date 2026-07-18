@@ -59,7 +59,7 @@ interface FakeLarkChannel {
   on(handlers: MessageHandlerMap): void;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
-  getChatMode(chatId: string): Promise<'group' | 'topic'>;
+  getChatMode(chatId: string): Promise<'p2p' | 'group' | 'topic'>;
   getConnectionStatus(): { state: 'connected'; reconnectAttempts: number };
   send(chatId: string, content: unknown, options?: unknown): Promise<void>;
   stream(chatId: string, input: unknown, options?: unknown): Promise<void>;
@@ -285,7 +285,12 @@ function createFakeLarkChannel(options: {
     async connect() {},
     async disconnect() {},
     async getChatMode() {
-      return 'group';
+      // Messages in this test are p2p (see `message()` below) — this must
+      // match so cardStyle resolution (`resolveCardStyle`, which maps
+      // group/topic chats to 'compact' by default) doesn't force the card
+      // pipeline here; this test is specifically about markdown-mode
+      // startup-failure handling.
+      return 'p2p';
     },
     getConnectionStatus() {
       return { state: 'connected', reconnectAttempts: 0 };
