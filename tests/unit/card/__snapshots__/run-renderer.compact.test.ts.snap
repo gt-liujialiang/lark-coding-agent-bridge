@@ -1,0 +1,431 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`compact card renderer > abnormal endings keep status line and skip the summary 1`] = `
+{
+  "body": {
+    "elements": [
+      {
+        "content": "_⏹ 已被中断_",
+        "tag": "markdown",
+        "text_size": "notation",
+      },
+      {
+        "border": {
+          "color": "blue",
+          "corner_radius": "5px",
+        },
+        "elements": [
+          {
+            "content": "库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。",
+            "tag": "markdown",
+            "text_size": "notation",
+          },
+        ],
+        "expanded": false,
+        "header": {
+          "icon": {
+            "size": "16px 16px",
+            "tag": "standard_icon",
+            "token": "down-small-ccm_outlined",
+          },
+          "icon_expanded_angle": -180,
+          "icon_position": "follow_text",
+          "title": {
+            "content": "📄 **查看详情**",
+            "tag": "markdown",
+          },
+          "vertical_align": "center",
+        },
+        "padding": "8px 8px 8px 8px",
+        "tag": "collapsible_panel",
+        "vertical_spacing": "8px",
+      },
+    ],
+  },
+  "config": {
+    "streaming_mode": false,
+    "summary": {
+      "content": "已中断",
+    },
+  },
+  "schema": "2.0",
+}
+`;
+
+exports[`compact card renderer > abnormal endings keep status line and skip the summary 2`] = `
+{
+  "body": {
+    "elements": [
+      {
+        "content": "⚠️ agent 失败：process failed",
+        "tag": "markdown",
+        "text_size": "notation",
+      },
+    ],
+  },
+  "config": {
+    "streaming_mode": false,
+    "summary": {
+      "content": "出错",
+    },
+  },
+  "schema": "2.0",
+}
+`;
+
+exports[`compact card renderer > done with long text shows summary placeholder then real summary 1`] = `
+{
+  "body": {
+    "elements": [
+      {
+        "content": "⏳ 正在生成总结…",
+        "tag": "markdown",
+      },
+      {
+        "border": {
+          "color": "blue",
+          "corner_radius": "5px",
+        },
+        "elements": [
+          {
+            "content": "库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。",
+            "tag": "markdown",
+            "text_size": "notation",
+          },
+        ],
+        "expanded": false,
+        "header": {
+          "icon": {
+            "size": "16px 16px",
+            "tag": "standard_icon",
+            "token": "down-small-ccm_outlined",
+          },
+          "icon_expanded_angle": -180,
+          "icon_position": "follow_text",
+          "title": {
+            "content": "📄 **查看详情**",
+            "tag": "markdown",
+          },
+          "vertical_align": "center",
+        },
+        "padding": "8px 8px 8px 8px",
+        "tag": "collapsible_panel",
+        "vertical_spacing": "8px",
+      },
+      {
+        "border": {
+          "color": "grey",
+          "corner_radius": "5px",
+        },
+        "elements": [
+          {
+            "content": "root cause hunt",
+            "tag": "markdown",
+            "text_size": "notation",
+          },
+        ],
+        "expanded": false,
+        "header": {
+          "icon": {
+            "size": "16px 16px",
+            "tag": "standard_icon",
+            "token": "down-small-ccm_outlined",
+          },
+          "icon_expanded_angle": -180,
+          "icon_position": "follow_text",
+          "title": {
+            "content": "🧠 **思考完成，点击查看**",
+            "tag": "markdown",
+          },
+          "vertical_align": "center",
+        },
+        "padding": "8px 8px 8px 8px",
+        "tag": "collapsible_panel",
+        "vertical_spacing": "8px",
+      },
+      {
+        "border": {
+          "color": "blue",
+          "corner_radius": "5px",
+        },
+        "elements": [
+          {
+            "content": "- ✅ **Bash** — grep err",
+            "tag": "markdown",
+            "text_size": "notation",
+          },
+        ],
+        "expanded": false,
+        "header": {
+          "icon": {
+            "size": "16px 16px",
+            "tag": "standard_icon",
+            "token": "down-small-ccm_outlined",
+          },
+          "icon_expanded_angle": -180,
+          "icon_position": "follow_text",
+          "title": {
+            "content": "☕ **1 个工具调用（已结束）**",
+            "tag": "markdown",
+          },
+          "vertical_align": "center",
+        },
+        "padding": "8px 8px 8px 8px",
+        "tag": "collapsible_panel",
+        "vertical_spacing": "8px",
+      },
+    ],
+  },
+  "config": {
+    "streaming_mode": false,
+    "summary": {
+      "content": "已完成",
+    },
+  },
+  "schema": "2.0",
+}
+`;
+
+exports[`compact card renderer > done with long text shows summary placeholder then real summary 2`] = `
+{
+  "body": {
+    "elements": [
+      {
+        "content": "扣减失败是 sync_status 未回写导致",
+        "tag": "markdown",
+      },
+      {
+        "border": {
+          "color": "blue",
+          "corner_radius": "5px",
+        },
+        "elements": [
+          {
+            "content": "库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。库存扣减失败的排查过程如下。",
+            "tag": "markdown",
+            "text_size": "notation",
+          },
+        ],
+        "expanded": false,
+        "header": {
+          "icon": {
+            "size": "16px 16px",
+            "tag": "standard_icon",
+            "token": "down-small-ccm_outlined",
+          },
+          "icon_expanded_angle": -180,
+          "icon_position": "follow_text",
+          "title": {
+            "content": "📄 **查看详情**",
+            "tag": "markdown",
+          },
+          "vertical_align": "center",
+        },
+        "padding": "8px 8px 8px 8px",
+        "tag": "collapsible_panel",
+        "vertical_spacing": "8px",
+      },
+      {
+        "border": {
+          "color": "grey",
+          "corner_radius": "5px",
+        },
+        "elements": [
+          {
+            "content": "root cause hunt",
+            "tag": "markdown",
+            "text_size": "notation",
+          },
+        ],
+        "expanded": false,
+        "header": {
+          "icon": {
+            "size": "16px 16px",
+            "tag": "standard_icon",
+            "token": "down-small-ccm_outlined",
+          },
+          "icon_expanded_angle": -180,
+          "icon_position": "follow_text",
+          "title": {
+            "content": "🧠 **思考完成，点击查看**",
+            "tag": "markdown",
+          },
+          "vertical_align": "center",
+        },
+        "padding": "8px 8px 8px 8px",
+        "tag": "collapsible_panel",
+        "vertical_spacing": "8px",
+      },
+      {
+        "border": {
+          "color": "blue",
+          "corner_radius": "5px",
+        },
+        "elements": [
+          {
+            "content": "- ✅ **Bash** — grep err",
+            "tag": "markdown",
+            "text_size": "notation",
+          },
+        ],
+        "expanded": false,
+        "header": {
+          "icon": {
+            "size": "16px 16px",
+            "tag": "standard_icon",
+            "token": "down-small-ccm_outlined",
+          },
+          "icon_expanded_angle": -180,
+          "icon_position": "follow_text",
+          "title": {
+            "content": "☕ **1 个工具调用（已结束）**",
+            "tag": "markdown",
+          },
+          "vertical_align": "center",
+        },
+        "padding": "8px 8px 8px 8px",
+        "tag": "collapsible_panel",
+        "vertical_spacing": "8px",
+      },
+    ],
+  },
+  "config": {
+    "streaming_mode": false,
+    "summary": {
+      "content": "已完成",
+    },
+  },
+  "schema": "2.0",
+}
+`;
+
+exports[`compact card renderer > done with short text renders it inline without summary or detail 1`] = `
+{
+  "body": {
+    "elements": [
+      {
+        "content": "是的，该接口幂等。",
+        "tag": "markdown",
+      },
+    ],
+  },
+  "config": {
+    "streaming_mode": false,
+    "summary": {
+      "content": "已完成",
+    },
+  },
+  "schema": "2.0",
+}
+`;
+
+exports[`compact card renderer > running with an active tool shows that tool header line 1`] = `
+{
+  "body": {
+    "elements": [
+      {
+        "content": "⏳ **Bash** — npm test",
+        "tag": "markdown",
+        "text_size": "notation",
+      },
+      {
+        "behaviors": [
+          {
+            "type": "callback",
+            "value": {
+              "cmd": "stop",
+            },
+          },
+        ],
+        "tag": "button",
+        "text": {
+          "content": "⏹ 终止",
+          "tag": "plain_text",
+        },
+        "type": "danger",
+      },
+    ],
+  },
+  "config": {
+    "streaming_mode": true,
+    "summary": {
+      "content": "正在调用工具",
+    },
+  },
+  "schema": "2.0",
+}
+`;
+
+exports[`compact card renderer > running with no tool shows thinking status + stop button only 1`] = `
+{
+  "body": {
+    "elements": [
+      {
+        "content": "🧠 正在思考…",
+        "tag": "markdown",
+        "text_size": "notation",
+      },
+      {
+        "behaviors": [
+          {
+            "type": "callback",
+            "value": {
+              "cmd": "stop",
+            },
+          },
+        ],
+        "tag": "button",
+        "text": {
+          "content": "⏹ 终止",
+          "tag": "plain_text",
+        },
+        "type": "danger",
+      },
+    ],
+  },
+  "config": {
+    "streaming_mode": true,
+    "summary": {
+      "content": "思考中",
+    },
+  },
+  "schema": "2.0",
+}
+`;
+
+exports[`compact card renderer > running with no tool shows thinking status + stop button only 2`] = `
+{
+  "body": {
+    "elements": [
+      {
+        "content": "🧠 正在思考…",
+        "tag": "markdown",
+        "text_size": "notation",
+      },
+      {
+        "behaviors": [
+          {
+            "type": "callback",
+            "value": {
+              "cmd": "stop",
+            },
+          },
+        ],
+        "tag": "button",
+        "text": {
+          "content": "⏹ 终止",
+          "tag": "plain_text",
+        },
+        "type": "danger",
+      },
+    ],
+  },
+  "config": {
+    "streaming_mode": true,
+    "summary": {
+      "content": "思考中",
+    },
+  },
+  "schema": "2.0",
+}
+`;

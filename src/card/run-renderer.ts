@@ -3,6 +3,8 @@ import { toolBodyMd, toolHeaderText } from './tool-render';
 
 const REASONING_MAX = 1500;
 const COLLAPSE_TOOL_THRESHOLD = 3;
+const DETAIL_MAX = 20_000;
+export const SHORT_REPLY_MAX = 100;
 
 interface ToolGroup {
   kind: 'tools';
@@ -16,9 +18,24 @@ type Group = ToolGroup | TextGroup;
 
 export interface RunCardRenderOptions {
   signCallback?: (action: string) => string;
+  /** 'compact' 启用「状态栏 + 结论 + 折叠详情」渲染；缺省/'streaming' 走现有渲染。 */
+  style?: 'streaming' | 'compact';
+  /** compact 专用：结束后的一句话结论。undefined = 总结生成中（显示 ⏳ 占位）。 */
+  summary?: string;
+}
+
+/** All text-block content joined — the agent's final reply, tools excluded. */
+export function finalReplyText(state: RunState): string {
+  return state.blocks
+    .filter((b): b is Extract<Block, { kind: 'text' }> => b.kind === 'text')
+    .map((b) => b.content)
+    .join('\n')
+    .trim();
 }
 
 export function renderCard(state: RunState, options: RunCardRenderOptions = {}): object {
+  if (options.style === 'compact') return renderCompactCard(state, options);
+
   const elements: object[] = [];
 
   if (state.reasoning.content) {
@@ -51,6 +68,80 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
     elements.push(stopButton(options));
   }
 
+  return {
+    schema: '2.0',
+    config: {
+      streaming_mode: state.terminal === 'running',
+      summary: { content: summaryText(state) },
+    },
+    body: { elements },
+  };
+}
+
+function renderCompactCard(state: RunState, options: RunCardRenderOptions): object {
+  const elements: object[] = [];
+
+  if (state.terminal === 'running') {
+    elements.push(noteMd(compactStatusLine(state)));
+    elements.push(stopButton(options));
+    return compactShell(state, elements);
+  }
+
+  const text = finalReplyText(state);
+
+  if (state.terminal === 'interrupted') {
+    elements.push(noteMd('_⏹ 已被中断_'));
+  } else if (state.terminal === 'idle_timeout') {
+    const mins = state.idleTimeoutMinutes ?? 0;
+    elements.push(noteMd(`_⏱ ${mins} 分钟无响应,已自动终止_`));
+  } else if (state.terminal === 'error' && state.errorMsg) {
+    elements.push(noteMd(`⚠️ agent 失败：${state.errorMsg}`));
+  } else if (state.terminal === 'done') {
+    if (!text) {
+      elements.push(noteMd('_（未返回内容）_'));
+    } else if (text.length < SHORT_REPLY_MAX) {
+      // 一句话回复直接平铺——不折叠、不总结，避免多一次点击。
+      elements.push(markdown(text));
+      return compactShell(state, elements);
+    } else {
+      elements.push(markdown(options.summary ?? '⏳ 正在生成总结…'));
+    }
+  }
+
+  if (text && (state.terminal !== 'done' || text.length >= SHORT_REPLY_MAX)) {
+    elements.push(
+      collapsiblePanel({
+        title: '📄 **查看详情**',
+        expanded: false,
+        border: 'blue',
+        body: truncate(text, DETAIL_MAX),
+      }),
+    );
+  }
+  if (state.reasoning.content) {
+    elements.push(reasoningPanel(state.reasoning.content, false));
+  }
+  const tools = state.blocks.filter(
+    (b): b is Extract<Block, { kind: 'tool' }> => b.kind === 'tool',
+  );
+  if (tools.length > 0) {
+    elements.push(collapsedToolSummary(tools.map((b) => b.tool), true));
+  }
+  return compactShell(state, elements);
+}
+
+function compactStatusLine(state: RunState): string {
+  for (let i = state.blocks.length - 1; i >= 0; i--) {
+    const b = state.blocks[i];
+    if (b && b.kind === 'tool' && b.tool.status === 'running') {
+      return toolHeaderText(b.tool);
+    }
+  }
+  if (state.footer === 'streaming') return '✍️ 正在输出…';
+  return '🧠 正在思考…';
+}
+
+function compactShell(state: RunState, elements: object[]): object {
   return {
     schema: '2.0',
     config: {
