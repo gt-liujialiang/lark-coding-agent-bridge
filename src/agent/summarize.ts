@@ -23,6 +23,7 @@ const SUMMARY_PROMPT =
   '不要过程描述，不要开场白，不要 emoji，不要 markdown 标题，直接输出结论文本。';
 const INPUT_MAX = 30_000;
 const FALLBACK_MAX = 80;
+const STDERR_SNIPPET_MAX = 500;
 
 /** First non-empty line, capped — used whenever the model call fails. */
 export function fallbackSummary(text: string): string {
@@ -68,12 +69,13 @@ function runOnce(
   return new Promise<string>((resolve, reject) => {
     let child: ChildProcess;
     try {
-      child = spawn(binary, args, { stdio: ['pipe', 'pipe', 'ignore'] });
+      child = spawn(binary, args, { stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (err) {
       reject(err);
       return;
     }
     let out = '';
+    let errOut = '';
     let settled = false;
     const settle = (fn: () => void): void => {
       if (settled) return;
@@ -83,6 +85,8 @@ function runOnce(
     };
     const timer = setTimeout(() => {
       settle(() => {
+        // Straight SIGKILL — deviates from adapter.ts's SIGTERM→grace→SIGKILL
+        // cascade on purpose: session-less one-shot, nothing to flush.
         child.kill('SIGKILL');
         reject(new Error(`summarize timed out after ${timeoutMs}ms`));
       });
@@ -90,13 +94,29 @@ function runOnce(
     child.stdout?.on('data', (d: Buffer | string) => {
       out += String(d);
     });
+    child.stderr?.on('data', (d: Buffer | string) => {
+      if (errOut.length < STDERR_SNIPPET_MAX) errOut += String(d);
+    });
     child.on('error', (err) => settle(() => reject(err)));
     child.on('close', (code) =>
       settle(() => {
-        if (code === 0) resolve(out);
-        else reject(new Error(`summarize exited with code ${code}`));
+        if (code === 0) {
+          resolve(out);
+          return;
+        }
+        const snippet = errOut.trim().slice(0, STDERR_SNIPPET_MAX);
+        reject(
+          new Error(
+            `summarize exited with code ${code}${snippet ? `: ${snippet}` : ''}`,
+          ),
+        );
       }),
     );
+    // Stream 'error' (e.g. EPIPE when the child dies before the write
+    // completes) is NOT covered by child.on('error'); without a listener it
+    // rethrows as an uncaught exception and kills the whole bridge. Attach
+    // BEFORE writing.
+    child.stdin?.on('error', (err) => settle(() => reject(err)));
     child.stdin?.write(input);
     child.stdin?.end();
   });

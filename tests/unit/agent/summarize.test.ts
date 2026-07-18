@@ -10,22 +10,31 @@ interface FakeChildScript {
   hang?: boolean;
   /** 触发 spawn error 事件。 */
   spawnError?: string;
+  /** 在 stdin 流上触发 error 事件（模拟 EPIPE）。 */
+  stdinError?: string;
+}
+
+interface FakeChild extends EventEmitter {
+  stdout: PassThrough;
+  stderr: PassThrough;
+  stdin: PassThrough;
+  killed: boolean;
+  killSignal?: string;
+  kill: (sig?: string) => void;
 }
 
 function fakeSpawn(script: FakeChildScript) {
   const calls: { command: string; args: string[]; stdin: string }[] = [];
+  const children: FakeChild[] = [];
   const spawn = (command: string, args: readonly string[] = []) => {
-    const child = new EventEmitter() as EventEmitter & {
-      stdout: PassThrough;
-      stdin: PassThrough;
-      killed: boolean;
-      kill: (sig?: string) => void;
-    };
+    const child = new EventEmitter() as FakeChild;
     child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
     child.stdin = new PassThrough();
     child.killed = false;
-    child.kill = () => {
+    child.kill = (sig?: string) => {
       child.killed = true;
+      child.killSignal = sig;
     };
     let stdinBuf = '';
     child.stdin.on('data', (d) => {
@@ -33,20 +42,25 @@ function fakeSpawn(script: FakeChildScript) {
     });
     const call = { command, args: [...args], stdin: '' };
     calls.push(call);
+    children.push(child);
     setImmediate(() => {
       call.stdin = stdinBuf;
       if (script.spawnError) {
         child.emit('error', new Error(script.spawnError));
         return;
       }
+      if (script.stdinError) {
+        child.stdin.emit('error', new Error(script.stdinError));
+      }
       if (script.hang) return;
       if (script.stdout) child.stdout.write(script.stdout);
       child.stdout.end();
+      child.stderr.end();
       child.emit('close', script.exitCode ?? 0);
     });
     return child;
   };
-  return { spawn: spawn as never, calls };
+  return { spawn: spawn as never, calls, children };
 }
 
 const LONG_REPLY = `扣减失败的根因是 sync_status 未回写。\n后续段落。${'x'.repeat(200)}`;
@@ -81,8 +95,16 @@ describe('summarizeReply', () => {
   });
 
   it('kills the child and falls back on timeout', async () => {
-    const { spawn } = fakeSpawn({ hang: true });
+    const { spawn, children } = fakeSpawn({ hang: true });
     const out = await summarizeReply(LONG_REPLY, { spawn, timeoutMs: 30 });
+    expect(out).toBe('扣减失败的根因是 sync_status 未回写。');
+    expect(children[0]?.killed).toBe(true);
+    expect(children[0]?.killSignal).toBe('SIGKILL');
+  });
+
+  it('survives a stdin stream error (EPIPE) and falls back', async () => {
+    const { spawn } = fakeSpawn({ stdinError: 'EPIPE', hang: true });
+    const out = await summarizeReply(LONG_REPLY, { spawn, timeoutMs: 1000 });
     expect(out).toBe('扣减失败的根因是 sync_status 未回写。');
   });
 });
