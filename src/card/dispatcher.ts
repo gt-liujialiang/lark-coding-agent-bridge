@@ -83,6 +83,18 @@ export async function handleCardAction(deps: CardDispatchDeps): Promise<void> {
 
   const cmd = typeof payload.cmd === 'string' ? payload.cmd : '';
   if (cmd) {
+    // Orphaned stop click: the card's run already finished, or a bridge
+    // restart cleared activeRuns and left the button on an old card. The
+    // token check below would fail on the missing run and drop the click
+    // silently ("按了没反应"). Acknowledge instead — access is already
+    // verified above, and there's nothing to stop.
+    if (cmd === 'stop' && !deps.activeRuns.get(scope)) {
+      log.info('cardAction', 'stop-no-active-run', { scope });
+      await deps.channel
+        .send(chatId, { markdown: '⏹ 该任务已结束或已停止，无需再终止。' }, { replyTo: deps.evt.messageId })
+        .catch((err) => log.fail('cardAction', err, { cmd: 'stop', step: 'ack-no-run' }));
+      return;
+    }
     if (isSignedBridgeCallback(payload) && !verifyBridgeToken(deps, payload, scope, cmd)) {
       return;
     }

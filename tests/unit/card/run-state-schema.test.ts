@@ -14,6 +14,31 @@ describe('run state terminal event schema', () => {
     );
   });
 
+  it('tracks the newest usage figures across usage events', () => {
+    let state = reduce(initialState, { type: 'usage', inputTokens: 100, outputTokens: 20 });
+    expect(state.usage).toEqual({ inputTokens: 100, outputTokens: 20 });
+
+    // Live events grow the totals (newest cumulative snapshot).
+    state = reduce(state, { type: 'usage', inputTokens: 100, outputTokens: 60 });
+    expect(state.usage).toEqual({ inputTokens: 100, outputTokens: 60 });
+  });
+
+  it('preserves cost from the final usage even if a later event omits it', () => {
+    let state = reduce(initialState, {
+      type: 'usage',
+      inputTokens: 150,
+      outputTokens: 210,
+      costUsd: 0.03,
+    });
+    // A stray later live event without cost must not wipe the recorded cost.
+    state = reduce(state, { type: 'usage', inputTokens: 150, outputTokens: 210 });
+    expect(state.usage?.costUsd).toBe(0.03);
+  });
+
+  it('leaves usage undefined until a usage event arrives', () => {
+    expect(reduce(initialState, { type: 'text', delta: 'hi' }).usage).toBeUndefined();
+  });
+
   it('maps error termination reasons onto visible terminal states', () => {
     expect(
       reduce(initialState, {

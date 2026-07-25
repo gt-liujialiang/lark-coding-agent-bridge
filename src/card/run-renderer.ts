@@ -1,5 +1,5 @@
 import type { Block, FooterStatus, RunState, ToolEntry } from './run-state';
-import { toolBodyMd, toolHeaderText } from './tool-render';
+import { runningToolPanelTitle, toolBodyMd, toolHeaderText } from './tool-render';
 
 const REASONING_MAX = 1500;
 const COLLAPSE_TOOL_THRESHOLD = 3;
@@ -16,12 +16,20 @@ type Group = ToolGroup | TextGroup;
 
 export interface RunCardRenderOptions {
   signCallback?: (action: string) => string;
+  /**
+   * Compact mode (`showToolCalls: false`): no tool-call history, no
+   * standalone reasoning panel, no switching status line (switching elements
+   * make the card flicker). While running, one STATIC collapsed panel
+   * (「📋 执行详情」) holds the whole process — reasoning + tool list — for
+   * on-demand expansion; the finished card is just the answer.
+   */
+  compactActivity?: boolean;
 }
 
 export function renderCard(state: RunState, options: RunCardRenderOptions = {}): object {
   const elements: object[] = [];
 
-  if (state.reasoning.content) {
+  if (!options.compactActivity && state.reasoning.content) {
     elements.push(reasoningPanel(state.reasoning.content, state.reasoning.active));
   }
 
@@ -30,7 +38,7 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
       if (group.content.trim()) {
         elements.push(markdown(group.content));
       }
-    } else {
+    } else if (!options.compactActivity) {
       elements.push(...renderToolGroup(group.tools, state.terminal !== 'running'));
     }
   }
@@ -47,9 +55,20 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
   }
 
   if (state.terminal === 'running') {
-    if (state.footer) elements.push(footerStatus(state.footer));
-    elements.push(stopButton(options));
+    // Both modes now show the same lightweight status line. In compact mode
+    // there are no tool panels, so nothing duplicates it; in full mode we
+    // skip it only when a running tool panel already says the same thing.
+    const runningToolVisible =
+      !options.compactActivity &&
+      state.blocks.some((b) => b.kind === 'tool' && b.tool.status === 'running');
+    if (state.footer && !(state.footer === 'tool_running' && runningToolVisible)) {
+      elements.push(footerStatus(state.footer));
+    }
+    elements.push(stopButtonRow(options));
   }
+
+  const usageNote = usageFooter(state.usage);
+  if (usageNote) elements.push(usageNote);
 
   return {
     schema: '2.0',
@@ -59,6 +78,22 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
     },
     body: { elements },
   };
+}
+
+/** Bottom-of-card token usage line, e.g. `📊 tokens 输入 1.2k · 输出 856 · $0.03`. */
+function usageFooter(usage: RunState['usage']): object | undefined {
+  if (!usage) return undefined;
+  const parts: string[] = [];
+  if (usage.inputTokens !== undefined) parts.push(`输入 ${formatTokens(usage.inputTokens)}`);
+  if (usage.outputTokens !== undefined) parts.push(`输出 ${formatTokens(usage.outputTokens)}`);
+  if (usage.costUsd !== undefined) parts.push(`$${usage.costUsd.toFixed(2)}`);
+  if (parts.length === 0) return undefined;
+  return noteMd(`📊 tokens ${parts.join(' · ')}`);
+}
+
+function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  return `${(n / 1000).toFixed(1)}k`;
 }
 
 function* groupBlocks(blocks: Block[]): Generator<Group> {
@@ -106,7 +141,7 @@ function reasoningPanel(content: string, active: boolean): object {
 
 function toolPanel(tool: ToolEntry, expanded: boolean): object {
   return collapsiblePanel({
-    title: toolHeaderText(tool),
+    title: tool.status === 'running' ? runningToolPanelTitle(tool) : toolHeaderText(tool),
     expanded,
     border: tool.status === 'error' ? 'red' : 'grey',
     body: toolBodyMd(tool) || '_无输出_',
@@ -177,17 +212,30 @@ function noteMd(content: string): object {
   return { tag: 'markdown', content, text_size: 'notation' };
 }
 
-function stopButton(options: RunCardRenderOptions): object {
+function stopButtonRow(options: RunCardRenderOptions): object {
   const value: Record<string, unknown> = { cmd: 'stop' };
   if (options.signCallback) {
     value.__bridge_cb = true;
     value.bridge_token = options.signCallback('stop');
   }
+  // Auto-width column keeps the button content-sized at the bottom-left.
   return {
-    tag: 'button',
-    text: { tag: 'plain_text', content: '⏹ 终止' },
-    type: 'danger',
-    behaviors: [{ type: 'callback', value }],
+    tag: 'column_set',
+    columns: [
+      {
+        tag: 'column',
+        width: 'auto',
+        elements: [
+          {
+            tag: 'button',
+            text: { tag: 'plain_text', content: '⏹ 终止' },
+            type: 'danger',
+            size: 'tiny',
+            behaviors: [{ type: 'callback', value }],
+          },
+        ],
+      },
+    ],
   };
 }
 

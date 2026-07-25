@@ -60,7 +60,7 @@ _运行中…_",
           "icon_expanded_angle": -180,
           "icon_position": "follow_text",
           "title": {
-            "content": "⏳ **Edit** — /repo/a.ts",
+            "content": "🧰 调用工具: **Edit** — /repo/a.ts（点击查看详情）",
             "tag": "markdown",
           },
           "vertical_align": "center",
@@ -70,25 +70,32 @@ _运行中…_",
         "vertical_spacing": "8px",
       },
       {
-        "content": "🧰 正在调用工具",
-        "tag": "markdown",
-        "text_size": "notation",
-      },
-      {
-        "behaviors": [
+        "columns": [
           {
-            "type": "callback",
-            "value": {
-              "cmd": "stop",
-            },
+            "elements": [
+              {
+                "behaviors": [
+                  {
+                    "type": "callback",
+                    "value": {
+                      "cmd": "stop",
+                    },
+                  },
+                ],
+                "size": "tiny",
+                "tag": "button",
+                "text": {
+                  "content": "⏹ 终止",
+                  "tag": "plain_text",
+                },
+                "type": "danger",
+              },
+            ],
+            "tag": "column",
+            "width": "auto",
           },
         ],
-        "tag": "button",
-        "text": {
-          "content": "⏹ 终止",
-          "tag": "plain_text",
-        },
-        "type": "danger",
+        "tag": "column_set",
       },
     ],
   },
@@ -192,20 +199,32 @@ exports[`run card renderer snapshots > renders active and completed thinking 1`]
         "text_size": "notation",
       },
       {
-        "behaviors": [
+        "columns": [
           {
-            "type": "callback",
-            "value": {
-              "cmd": "stop",
-            },
+            "elements": [
+              {
+                "behaviors": [
+                  {
+                    "type": "callback",
+                    "value": {
+                      "cmd": "stop",
+                    },
+                  },
+                ],
+                "size": "tiny",
+                "tag": "button",
+                "text": {
+                  "content": "⏹ 终止",
+                  "tag": "plain_text",
+                },
+                "type": "danger",
+              },
+            ],
+            "tag": "column",
+            "width": "auto",
           },
         ],
-        "tag": "button",
-        "text": {
-          "content": "⏹ 终止",
-          "tag": "plain_text",
-        },
-        "type": "danger",
+        "tag": "column_set",
       },
     ],
   },
@@ -372,20 +391,32 @@ exports[`run card renderer snapshots > renders initial running state 1`] = `
         "text_size": "notation",
       },
       {
-        "behaviors": [
+        "columns": [
           {
-            "type": "callback",
-            "value": {
-              "cmd": "stop",
-            },
+            "elements": [
+              {
+                "behaviors": [
+                  {
+                    "type": "callback",
+                    "value": {
+                      "cmd": "stop",
+                    },
+                  },
+                ],
+                "size": "tiny",
+                "tag": "button",
+                "text": {
+                  "content": "⏹ 终止",
+                  "tag": "plain_text",
+                },
+                "type": "danger",
+              },
+            ],
+            "tag": "column",
+            "width": "auto",
           },
         ],
-        "tag": "button",
-        "text": {
-          "content": "⏹ 终止",
-          "tag": "plain_text",
-        },
-        "type": "danger",
+        "tag": "column_set",
       },
     ],
   },
@@ -462,7 +493,7 @@ _运行中…_",
           "icon_expanded_angle": -180,
           "icon_position": "follow_text",
           "title": {
-            "content": "⏳ **Bash** — pwd",
+            "content": "🧰 调用工具: **Bash** — pwd（点击查看详情）",
             "tag": "markdown",
           },
           "vertical_align": "center",
@@ -472,25 +503,32 @@ _运行中…_",
         "vertical_spacing": "8px",
       },
       {
-        "content": "🧰 正在调用工具",
-        "tag": "markdown",
-        "text_size": "notation",
-      },
-      {
-        "behaviors": [
+        "columns": [
           {
-            "type": "callback",
-            "value": {
-              "cmd": "stop",
-            },
+            "elements": [
+              {
+                "behaviors": [
+                  {
+                    "type": "callback",
+                    "value": {
+                      "cmd": "stop",
+                    },
+                  },
+                ],
+                "size": "tiny",
+                "tag": "button",
+                "text": {
+                  "content": "⏹ 终止",
+                  "tag": "plain_text",
+                },
+                "type": "danger",
+              },
+            ],
+            "tag": "column",
+            "width": "auto",
           },
         ],
-        "tag": "button",
-        "text": {
-          "content": "⏹ 终止",
-          "tag": "plain_text",
-        },
-        "type": "danger",
+        "tag": "column_set",
       },
     ],
   },

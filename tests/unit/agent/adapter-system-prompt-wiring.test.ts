@@ -72,6 +72,17 @@ describe('ClaudeAdapter system prompt wiring', () => {
   });
 });
 
+describe('ClaudeAdapter streaming flags', () => {
+  it('requests token-level partial messages so replies stream incrementally', () => {
+    spawnMock.spawnProcess.mockReturnValue(fakeChild());
+
+    new ClaudeAdapter().run({ runId: 'r1', prompt: 'hi', cwd: '/tmp' });
+
+    const args = spawnMock.spawnProcess.mock.calls[0]?.[1] as string[];
+    expect(args).toContain('--include-partial-messages');
+  });
+});
+
 describe('CodexAdapter system prompt wiring', () => {
   function codexAdapter(): CodexAdapter {
     return new CodexAdapter({

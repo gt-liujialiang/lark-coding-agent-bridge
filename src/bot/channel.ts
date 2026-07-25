@@ -16,9 +16,10 @@ import type { AgentAdapter, AgentEvent } from '../agent/types';
 import { handleCardAction } from '../card/dispatcher';
 import { CallbackAuth } from '../card/callback-auth';
 import { CallbackNonceStore } from '../card/callback-store';
-import { renderCard } from '../card/run-renderer';
+import { renderCard, type RunCardRenderOptions } from '../card/run-renderer';
 import {
   finalizeIfRunning,
+  hideFinishedTools,
   initialState,
   markIdleTimeout,
   markInterrupted,
@@ -775,11 +776,14 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
 
   // Re-read prefs on every flush so toggling /config mid-stream takes
   // effect immediately. Cheap object lookups, no allocation when on.
+  // showToolCalls=false in non-card modes hides finished tool history but
+  // keeps the currently-running tool visible so users can see what's
+  // executing right now; card mode gets compactActivity instead (below).
   const filterForPrefs = (state: RunState): RunState => {
     if (getShowToolCalls(controls.cfg)) return state;
-    return { ...state, blocks: state.blocks.filter((b) => b.kind !== 'tool') };
+    return hideFinishedTools(state);
   };
-  const cardRenderOptions = callbackAuth
+  const signOptions = callbackAuth
     ? {
         signCallback: (action: string) =>
           callbackAuth.sign({
@@ -793,6 +797,12 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           }),
       }
     : {};
+  // showToolCalls=false → compact card: no tool history, just one live
+  // "current activity" panel (thinking / running tool, expandable).
+  const cardRenderOptions = (): RunCardRenderOptions => ({
+    ...signOptions,
+    compactActivity: !getShowToolCalls(controls.cfg),
+  });
 
   // For non-card modes Claude's output doesn't surface visually until either
   // a first streamed token (markdown mode) or the whole run ends (text mode).
@@ -817,7 +827,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         async (state) => {
           latestState = state;
           if (cardCtrl) {
-            await cardCtrl.update(renderCard(filterForPrefs(state), cardRenderOptions));
+            await cardCtrl.update(renderCard(state, cardRenderOptions()));
           }
         },
       );
@@ -825,11 +835,11 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         chatId,
         {
           card: {
-            initial: renderCard(initialState, cardRenderOptions),
+            initial: renderCard(initialState, cardRenderOptions()),
             producer: async (ctrl) => {
               producerStarted = true;
               cardCtrl = ctrl;
-              await ctrl.update(renderCard(filterForPrefs(latestState), cardRenderOptions));
+              await ctrl.update(renderCard(latestState, cardRenderOptions()));
               await renderDone;
             },
           },
@@ -844,7 +854,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         fallback: async (state) => {
           await channel.send(
             chatId,
-            { card: renderCard(filterForPrefs(state), cardRenderOptions) },
+            { card: renderCard(state, cardRenderOptions()) },
             sendOpts,
           );
         },
@@ -989,16 +999,23 @@ async function processAgentStream(
       }
       if (evt.type === 'usage') {
         const { costUsd, inputTokens, outputTokens } = evt;
-        if (costUsd !== undefined || inputTokens !== undefined || outputTokens !== undefined) {
+        // Usage now streams live (per turn) for the card's token footer, but
+        // only the final authoritative event carries costUsd — log/report
+        // metrics once on that one to avoid per-delta spam.
+        if (costUsd !== undefined) {
           log.info('agent', 'usage', {
-            ...(costUsd !== undefined ? { costUsd: Number(costUsd.toFixed(4)) } : {}),
+            costUsd: Number(costUsd.toFixed(4)),
             ...(inputTokens !== undefined ? { inputTokens } : {}),
             ...(outputTokens !== undefined ? { outputTokens } : {}),
           });
-          if (costUsd !== undefined) reportMetric('cost_usd', costUsd);
+          reportMetric('cost_usd', costUsd);
           if (inputTokens !== undefined) reportMetric('tokens_in', inputTokens);
           if (outputTokens !== undefined) reportMetric('tokens_out', outputTokens);
         }
+        // Reduce + flush every event so the token footer updates in real time;
+        // usage never changes footer/terminal, so no transition log is needed.
+        state = reduce(state, evt);
+        await flush(state);
         continue;
       }
 

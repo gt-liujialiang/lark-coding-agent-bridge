@@ -18,6 +18,17 @@ export function toolHeaderText(tool: ToolEntry): string {
   return summary ? `${icon} **${tool.name}** — ${summary}` : `${icon} **${tool.name}**`;
 }
 
+/**
+ * Panel title for a tool that is still executing — used by the card renderer
+ * where the panel body (full input) is one click away:
+ *   `🧰 调用工具: **Bash** — git log --oneline（点击查看详情）`
+ */
+export function runningToolPanelTitle(tool: ToolEntry): string {
+  const summary = summarizeInput(tool.name, tool.input);
+  const head = summary ? `**${tool.name}** — ${summary}` : `**${tool.name}**`;
+  return `🧰 调用工具: ${head}（点击查看详情）`;
+}
+
 export function toolBodyMd(tool: ToolEntry): string {
   const parts: string[] = [];
   const inputMd = renderInput(tool);

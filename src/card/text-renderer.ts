@@ -27,7 +27,14 @@ export function renderText(state: RunState): string {
   } else if (state.terminal === 'error' && state.errorMsg) {
     parts.push(`⚠️ agent 失败:${state.errorMsg}`);
   } else if (state.terminal === 'running' && state.footer) {
-    parts.push(footerLine(state.footer));
+    // A visible "⏳ **Bash** — …" line already says a tool is running;
+    // the generic tool_running footer would just repeat it.
+    const runningToolVisible = state.blocks.some(
+      (b) => b.kind === 'tool' && b.tool.status === 'running',
+    );
+    if (!(state.footer === 'tool_running' && runningToolVisible)) {
+      parts.push(footerLine(state.footer));
+    }
   }
 
   return parts.join('\n\n');
@@ -45,6 +52,8 @@ function renderBlock(block: Block): string {
  *   `> ⏳ **Bash** — git status`
  *   `> ✅ **Read** — ~/code/foo.ts`
  * Reuses `toolHeaderText` so the format matches the card mode header.
+ * Deliberately one line even while running — the header's 80-char input
+ * summary is the whole "detail"; full inputs live in the file log.
  */
 function toolLine(tool: ToolEntry): string {
   return `> ${toolHeaderText(tool)}`;

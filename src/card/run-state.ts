@@ -17,6 +17,13 @@ export type Block =
 export type FooterStatus = 'thinking' | 'tool_running' | 'streaming' | null;
 export type Terminal = 'running' | 'done' | 'interrupted' | 'error' | 'idle_timeout';
 
+export interface UsageTotals {
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  costUsd?: number;
+}
+
 export interface RunState {
   blocks: Block[];
   reasoning: { content: string; active: boolean };
@@ -26,6 +33,8 @@ export interface RunState {
   /** Set when terminal === 'idle_timeout' — how long claude was idle before
    * the watchdog gave up (so the message can say "N 分钟无响应"). */
   idleTimeoutMinutes?: number;
+  /** Latest cumulative token usage from the agent's `usage` events, if any. */
+  usage?: UsageTotals;
 }
 
 export const initialState: RunState = {
@@ -70,6 +79,17 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
       };
     }
 
+    case 'usage': {
+      // Usage events report cumulative totals — keep the newest snapshot, but
+      // merge so a late live event (no cost) can't wipe the final cost.
+      const usage: UsageTotals = { ...state.usage };
+      if (evt.inputTokens !== undefined) usage.inputTokens = evt.inputTokens;
+      if (evt.outputTokens !== undefined) usage.outputTokens = evt.outputTokens;
+      if (evt.cachedInputTokens !== undefined) usage.cachedInputTokens = evt.cachedInputTokens;
+      if (evt.costUsd !== undefined) usage.costUsd = evt.costUsd;
+      return { ...state, usage };
+    }
+
     case 'tool_use': {
       const tool: ToolEntry = {
         id: evt.id,
@@ -97,7 +117,12 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
           },
         };
       });
-      return { ...state, blocks };
+      // No tool left in flight → the model is digesting the result until the
+      // next event; surface that gap as thinking rather than a stale
+      // tool_running footer with no matching tool.
+      const anyRunning = blocks.some((b) => b.kind === 'tool' && b.tool.status === 'running');
+      const footer = state.footer === 'tool_running' && !anyRunning ? 'thinking' : state.footer;
+      return { ...state, blocks, footer };
     }
 
     case 'error': {
@@ -134,6 +159,20 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
     default:
       return state;
   }
+}
+
+/**
+ * Filter for `showToolCalls: false` — while the run is live, keep every tool
+ * block visible so users can watch (and expand) what's executing without it
+ * vanishing the moment a tool finishes; once the run reaches a terminal
+ * state, drop all tool blocks so the final message is just the answer.
+ */
+export function hideFinishedTools(state: RunState): RunState {
+  if (state.terminal === 'running') return state;
+  return {
+    ...state,
+    blocks: state.blocks.filter((b) => b.kind !== 'tool'),
+  };
 }
 
 export function markInterrupted(state: RunState): RunState {

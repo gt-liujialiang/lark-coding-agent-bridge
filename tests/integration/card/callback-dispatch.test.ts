@@ -100,6 +100,20 @@ describe('signed card callback dispatch', () => {
     expect(queued[0]?.content).toBe('[card-click] {"choice":"a"}');
   });
 
+  it('acknowledges a stop click when the run already ended instead of silently dropping it', async () => {
+    const h = await createHarness();
+    // No active run registered for the scope — mimics a stale card whose run
+    // finished (or a bridge restart that cleared activeRuns).
+    await h.dispatch({
+      cmd: 'stop',
+      __bridge_cb: true,
+      bridge_token: h.token('stop'),
+    });
+
+    expect(h.channel.sent).toHaveLength(1);
+    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('任务已结束');
+  });
+
   it('rejects bridge callbacks when callback auth is unavailable', async () => {
     const h = await createHarness({ callbackAuth: false });
     const activeRun = h.agent.run({ runId: 'run-active', prompt: 'running' }) as FakeAgentRun;

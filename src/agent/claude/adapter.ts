@@ -13,7 +13,7 @@ import {
   type AgentRun,
   type AgentRunOptions,
 } from '../types';
-import { translateEvent } from './stream-json';
+import { createStreamJsonTranslator } from './stream-json';
 
 export interface ClaudeAdapterOptions {
   binary?: string;
@@ -63,6 +63,9 @@ export class ClaudeAdapter implements AgentAdapter {
       '--output-format',
       'stream-json',
       '--verbose',
+      // Token-level deltas — without this, stream-json only emits whole
+      // assistant messages and the final answer pops in all at once.
+      '--include-partial-messages',
       '--permission-mode',
       opts.permissionMode ?? CLAUDE_DEFAULT_PERMISSION_MODE,
       '--append-system-prompt',
@@ -186,6 +189,7 @@ async function* createEventStream(
   }
 
   const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const translate = createStreamJsonTranslator();
   let sawStdout = false;
   let silentExitTimer: ReturnType<typeof setTimeout> | undefined;
   const closeSilentStdout = (): void => {
@@ -205,7 +209,7 @@ async function* createEventStream(
       } catch {
         continue;
       }
-      yield* translateEvent(parsed);
+      yield* translate(parsed);
     }
   } finally {
     if (silentExitTimer) clearTimeout(silentExitTimer);

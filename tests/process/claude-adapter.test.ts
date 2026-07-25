@@ -43,22 +43,23 @@ describe('ClaudeAdapter process contract', () => {
 
     expect(await realpath(record.cwd)).toBe(await realpath(fake.dir));
     expect(record.env.LARK_CHANNEL).toBe('1');
-    expect(record.argv.slice(0, 8)).toEqual([
+    expect(record.argv.slice(0, 9)).toEqual([
       '-p',
       'hello',
       '--output-format',
       'stream-json',
       '--verbose',
+      '--include-partial-messages',
       '--permission-mode',
       'acceptEdits',
       '--append-system-prompt',
     ]);
-    expect(record.argv[8]).toContain('lark-channel-bridge 运行约定');
-    expect(record.argv[8]).toContain('__bridge_cb');
-    expect(record.argv[8]).toContain('LARK_CHANNEL_PROFILE');
-    expect(record.argv[8]).toContain('LARKSUITE_CLI_CONFIG_DIR');
-    expect(record.argv[8]).not.toContain('lark-cli config bind --source lark-channel');
-    expect(record.argv[8]).not.toContain('__claude_cb');
+    expect(record.argv[9]).toContain('lark-channel-bridge 运行约定');
+    expect(record.argv[9]).toContain('__bridge_cb');
+    expect(record.argv[9]).toContain('LARK_CHANNEL_PROFILE');
+    expect(record.argv[9]).toContain('LARKSUITE_CLI_CONFIG_DIR');
+    expect(record.argv[9]).not.toContain('lark-cli config bind --source lark-channel');
+    expect(record.argv[9]).not.toContain('__claude_cb');
     expect(record.argv).not.toContain('--resume');
     expect(record.argv).not.toContain('--model');
   });
@@ -120,7 +121,7 @@ describe('ClaudeAdapter process contract', () => {
     const record = await readRecord(fake.recordPath);
 
     expect(record.argv.slice(-4)).toEqual(['--resume', 'sess-old', '--model', 'sonnet']);
-    expect(record.argv[6]).toBe('bypassPermissions');
+    expect(record.argv[7]).toBe('bypassPermissions');
   });
 
   it('includes stderr when the process exits non-zero', async () => {

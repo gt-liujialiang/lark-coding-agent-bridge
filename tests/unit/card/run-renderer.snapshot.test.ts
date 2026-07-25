@@ -88,10 +88,8 @@ describe('run card renderer snapshots', () => {
   it('injects signed bridge callback values for managed run controls', () => {
     const card = renderCard(initialState, {
       signCallback: (action) => `token-for-${action}`,
-    }) as {
-      body?: { elements?: Array<{ tag?: string; behaviors?: Array<{ value?: Record<string, unknown> }> }> };
-    };
-    const button = card.body?.elements?.find((element) => element.tag === 'button');
+    });
+    const button = findButton(card);
 
     expect(button?.behaviors?.[0]?.value).toEqual({
       cmd: 'stop',
@@ -118,6 +116,30 @@ describe('run card renderer snapshots', () => {
 
 function stateFrom(events: AgentEvent[]): RunState {
   return events.reduce((state, event) => reduce(state, event), initialState);
+}
+
+interface ButtonEl {
+  tag?: string;
+  behaviors?: Array<{ value?: Record<string, unknown> }>;
+}
+
+/** Depth-first search for the first button element anywhere in the card. */
+function findButton(node: unknown): ButtonEl | undefined {
+  if (!node || typeof node !== 'object') return undefined;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const hit = findButton(item);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+  const rec = node as Record<string, unknown> & ButtonEl;
+  if (rec.tag === 'button') return rec;
+  for (const value of Object.values(rec)) {
+    const hit = findButton(value);
+    if (hit) return hit;
+  }
+  return undefined;
 }
 
 function expectCard(state: RunState) {
