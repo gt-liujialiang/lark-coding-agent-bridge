@@ -8,6 +8,8 @@ import { CallbackNonceStore } from '../../../src/card/callback-store.js';
 import { handleCardAction } from '../../../src/card/dispatcher.js';
 import type { Controls } from '../../../src/commands/index.js';
 import { createDefaultProfileConfig } from '../../../src/config/profile-schema.js';
+import { LedgerStore } from '../../../src/observability/ledger.js';
+import { registerFeedbackCard } from '../../../src/card/feedback-store.js';
 import { SessionStore } from '../../../src/session/store.js';
 import { WorkspaceStore } from '../../../src/workspace/store.js';
 import { FakeAgentAdapter, type FakeAgentRun } from '../../helpers/fake-agent.js';
@@ -114,6 +116,28 @@ describe('signed card callback dispatch', () => {
     expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('任务已结束');
   });
 
+  it('records a 👍 button vote and refreshes the card counts (no token/active run needed)', async () => {
+    const h = await createHarness();
+    const ledger = new LedgerStore(`${h.tmp.profile}/ledger.json`);
+    ledger.record({ id: 'run-fb', openId: 'ou_owner', chatId: 'oc_group', chatKind: 'group', at: 1 });
+    let updatedWith: { up: number; down: number } | undefined;
+    registerFeedbackCard('om_card', {
+      entryId: 'run-fb',
+      update: async (counts) => {
+        updatedWith = counts;
+      },
+    });
+
+    await h.dispatch({ cmd: 'fb', arg: 'up', fb_id: 'run-fb' }, undefined, ledger);
+
+    // Vote is recorded synchronously.
+    expect(ledger.countsFor('run-fb')).toEqual({ up: 1, down: 0 });
+    // The card refresh is deferred (to outlast Feishu's callback revert),
+    // then reads the freshest counts.
+    await new Promise((r) => setTimeout(r, 1100));
+    expect(updatedWith).toEqual({ up: 1, down: 0 });
+  });
+
   it('rejects bridge callbacks when callback auth is unavailable', async () => {
     const h = await createHarness({ callbackAuth: false });
     const activeRun = h.agent.run({ runId: 'run-active', prompt: 'running' }) as FakeAgentRun;
@@ -139,7 +163,11 @@ type Harness = {
   controls: Controls;
   pending: PendingQueue;
   auth: CallbackAuth;
-  dispatch(value: Record<string, unknown>, formValue?: Record<string, unknown>): Promise<void>;
+  dispatch(
+    value: Record<string, unknown>,
+    formValue?: Record<string, unknown>,
+    ledger?: LedgerStore,
+  ): Promise<void>;
   token(
     action: string,
     overrides?: { operatorOpenId?: string; nonce?: string; scope?: string },
@@ -215,7 +243,7 @@ async function createHarness(
         ttlMs: 60_000,
       });
     },
-    dispatch: (value, formValue) =>
+    dispatch: (value, formValue, ledger) =>
       handleCardAction({
         channel: channel as unknown as Parameters<typeof handleCardAction>[0]['channel'],
         evt: cardEvent(value, formValue),
@@ -228,6 +256,7 @@ async function createHarness(
         chatModeCache,
         ...(opts.callbackAuth === false ? {} : { callbackAuth: auth }),
         callbackPolicyFingerprint: 'fp-1',
+        ...(ledger ? { ledger } : {}),
       }),
   };
 }

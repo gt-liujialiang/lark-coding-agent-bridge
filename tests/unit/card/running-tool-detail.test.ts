@@ -191,6 +191,43 @@ describe('running tool panel in card mode', () => {
   });
 });
 
+describe('feedback guidance buttons on the finished card', () => {
+  const doneState = stateFrom([
+    { type: 'text', delta: '答案' },
+    { type: 'done', terminationReason: 'normal' },
+  ]);
+
+  it('shows 👍/👎 count buttons only once the run is done', () => {
+    expect(JSON.stringify(renderCard(initialState, { feedback: { entryId: 'r1' } }))).not.toContain('fb_id');
+
+    const done = JSON.stringify(renderCard(doneState, { feedback: { entryId: 'r1' } }));
+    expect(done).toContain('👍 0');
+    expect(done).toContain('👎 0');
+    expect(done).toContain('"fb_id":"r1"');
+    expect(done).toContain('"arg":"up"');
+    expect(done).toContain('"arg":"down"');
+  });
+
+  it('reflects current counts and keeps buttons clickable after voting', () => {
+    const card = JSON.stringify(renderCard(doneState, { feedback: { entryId: 'r1', counts: { up: 3, down: 1 } } }));
+    expect(card).toContain('👍 3');
+    expect(card).toContain('👎 1');
+    expect(card).toContain('"fb_id":"r1"');
+  });
+
+  it('omits feedback buttons when no feedback option is given', () => {
+    expect(JSON.stringify(renderCard(doneState))).not.toContain('fb_id');
+  });
+
+  it('omits feedback on interrupted/error terminals', () => {
+    const interrupted = stateFrom([
+      { type: 'text', delta: 'x' },
+      { type: 'error', message: 'stopped', terminationReason: 'interrupted' },
+    ]);
+    expect(JSON.stringify(renderCard(interrupted, { feedback: { entryId: 'r' } }))).not.toContain('fb_id');
+  });
+});
+
 describe('footer after tool completion', () => {
   it('falls back to thinking when the last running tool finishes', () => {
     const state = stateFrom([

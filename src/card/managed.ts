@@ -29,14 +29,17 @@ export async function sendManagedCard(
   channel: LarkChannel,
   recipientId: string,
   card: object,
-  opts: { replyTo?: string } = {},
+  opts: { replyTo?: string; replyInThread?: boolean } = {},
 ): Promise<ManagedCardSendResult> {
   const { cardId } = await channel.createCard(card);
-  const { messageId } = await channel.send(
-    recipientId,
-    { cardId },
-    opts.replyTo ? { replyTo: opts.replyTo } : undefined,
-  );
+  const sendOpts =
+    opts.replyTo || opts.replyInThread
+      ? {
+          ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
+          ...(opts.replyInThread ? { replyInThread: true } : {}),
+        }
+      : undefined;
+  const { messageId } = await channel.send(recipientId, { cardId }, sendOpts);
   byMessageId.set(messageId, { cardId, sequence: 0 });
   return { messageId, cardId };
 }

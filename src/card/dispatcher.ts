@@ -6,6 +6,8 @@ import type { PendingQueue } from '../bot/pending-queue';
 import type { ProcessPool } from '../bot/process-pool';
 import type { CallbackAuth } from './callback-auth';
 import { runCommandHandler, type CommandContext, type Controls } from '../commands';
+import { getFeedbackCard } from './feedback-store';
+import type { LedgerStore } from '../observability/ledger';
 import { log } from '../core/logger';
 import { canUseDm, canUseGroup } from '../policy/access';
 import type { RunExecutor } from '../runtime/run-executor';
@@ -39,6 +41,7 @@ export interface CardDispatchDeps {
   callbackAuth?: CallbackAuth;
   callbackPolicyFingerprint?: string;
   callbackPolicyFingerprintForScope?: (scope: string) => string | undefined;
+  ledger?: LedgerStore;
 }
 
 export async function handleCardAction(deps: CardDispatchDeps): Promise<void> {
@@ -83,6 +86,36 @@ export async function handleCardAction(deps: CardDispatchDeps): Promise<void> {
 
   const cmd = typeof payload.cmd === 'string' ? payload.cmd : '';
   if (cmd) {
+    // 👍/👎 guidance button on a finished reply. Access is already verified
+    // above; the run is gone so no signed token / active run is involved.
+    // Record the vote (one per person, shared with native reactions) and
+    // refresh the card counts in place.
+    if (cmd === 'fb') {
+      const id = typeof payload.fb_id === 'string' ? payload.fb_id : '';
+      const arg = payload.arg === 'up' || payload.arg === 'down' ? payload.arg : undefined;
+      if (id && arg) {
+        const counts = deps.ledger?.setVote(id, operatorId, arg) ?? null;
+        const card = getFeedbackCard(deps.evt.messageId);
+        log.info('cardAction', 'feedback', { id, arg, recorded: counts !== null, cardFound: Boolean(card) });
+        if (card && counts) {
+          // Feishu reverts a callback button's card to its pre-click state
+          // once the callback completes (the SDK can't return a card in the
+          // response). A synchronous update gets clobbered by that revert
+          // ("flash then back to 0"). So return now — letting the callback
+          // ack + revert happen — then refresh AFTER it, reading the freshest
+          // counts, so the number lands last and sticks.
+          const ledger = deps.ledger;
+          setTimeout(() => {
+            const fresh = ledger?.countsFor(id) ?? counts;
+            void card
+              .update(fresh)
+              .then(() => log.info('cardAction', 'feedback-refreshed', { id, up: fresh.up, down: fresh.down }))
+              .catch((err) => log.fail('cardAction', err, { cmd: 'fb', step: 'refresh' }));
+          }, 1000);
+        }
+      }
+      return;
+    }
     // Orphaned stop click: the card's run already finished, or a bridge
     // restart cleared activeRuns and left the button on an old card. The
     // token check below would fail on the missing run and drop the click

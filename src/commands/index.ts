@@ -6,6 +6,7 @@ import type { LarkChannel, NormalizedMessage } from '@larksuite/channel';
 import { claudeCapability, codexCapability } from '../agent/capability';
 import type { AgentAdapter } from '../agent/types';
 import type { ActiveRuns } from '../bot/active-runs';
+import type { LedgerStore } from '../observability/ledger';
 import {
   accountCurrentCard,
   accountFailureCard,
@@ -15,6 +16,7 @@ import {
 import { configCancelledCard, configFailedCard, configFormCard, configSavedCard } from '../card/config-card';
 import { forgetManagedCard, sendManagedCard, updateManagedCard } from '../card/managed';
 import { helpCard, resumeCard, statusCard, workspacesCard } from '../card/templates';
+import { formatLedgerReportCard } from './report-format';
 import type { AppConfig, AppPreferences, MessageReplyMode, TenantBrand } from '../config/schema';
 import {
   getAgentStopGraceMs,
@@ -70,6 +72,7 @@ import { validateAppCredentials } from '../utils/feishu-auth';
 import type { WorkspaceStore } from '../workspace/store';
 import { createBoundChat, defaultChatName } from '../bot/group';
 import { fetchKnownChats, type KnownChat } from '../bot/lark-info';
+import { resolveUserNames } from '../bot/user-names';
 import { applyLarkCliIdentityPolicy, hasStructuredLarkCliUserAuth } from '../lark-cli/identity-policy';
 
 export interface Controls {
@@ -130,6 +133,8 @@ export interface CommandContext {
    * text command. Determines whether to update the existing card vs send a
    * new one. */
   fromCardAction?: boolean;
+  /** Usage ledger for `/report`. Absent in contexts without one. */
+  ledger?: LedgerStore;
 }
 
 type Handler = (args: string, ctx: CommandContext) => Promise<void>;
@@ -168,6 +173,7 @@ const handlers: Record<string, Handler> = {
   '/doc': handleDoc,
   '/invite': handleInvite,
   '/remove': handleRemove,
+  '/report': handleReport,
 };
 
 /**
@@ -186,6 +192,7 @@ const ADMIN_COMMANDS = new Set([
   '/ws',
   '/invite',
   '/remove',
+  '/report',
 ]);
 
 function isAdminCommand(cmd: string): boolean {
@@ -815,6 +822,22 @@ function formatOwnerState(ctx: CommandContext): string {
     ? ` refreshed=${new Date(ctx.controls.ownerRefreshedAt).toISOString()}`
     : '';
   return `${state} owner=${owner}${refreshed}`;
+}
+
+async function handleReport(_args: string, ctx: CommandContext): Promise<void> {
+  // Admin-gated (see ADMIN_COMMANDS): the report aggregates every user's usage.
+  if (!ctx.ledger) {
+    await reply(ctx, '台账未启用。');
+    return;
+  }
+  const summary = ctx.ledger.summarize();
+  const names = await resolveUserNames(
+    ctx.channel,
+    summary.byUser.map((u) => u.openId),
+  );
+  log.info('command', 'report', { users: summary.byUser.length, namesResolved: names.size });
+  const card = formatLedgerReportCard(summary, names);
+  await ctx.channel.send(ctx.msg.chatId, { card }, { replyTo: ctx.msg.messageId });
 }
 
 async function handleStop(args: string, ctx: CommandContext): Promise<void> {

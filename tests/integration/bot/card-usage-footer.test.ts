@@ -33,8 +33,9 @@ interface FakeChannel {
   disconnect(): Promise<void>;
   getChatMode(): Promise<'group'>;
   getConnectionStatus(): { state: 'connected'; reconnectAttempts: number };
-  send(chatId: string, content: unknown, options?: unknown): Promise<void>;
-  stream(chatId: string, input: unknown, options?: unknown): Promise<void>;
+  createCard(card: unknown): Promise<{ cardId: string }>;
+  updateCardById(cardId: string, card: unknown, sequence?: number): Promise<void>;
+  send(chatId: string, content: unknown, options?: unknown): Promise<{ messageId: string }>;
   addReaction(): Promise<string>;
   removeReaction(): Promise<void>;
 }
@@ -133,18 +134,18 @@ function createChannel(): FakeChannel {
     getConnectionStatus() {
       return { state: 'connected', reconnectAttempts: 0 };
     },
-    async send(_chatId, content) {
-      cardUpdates.push(content);
+    // Managed entity-card path: createCard → send(by cardId) → updateCardById.
+    async createCard(card: unknown) {
+      cardUpdates.push(card);
+      return { cardId: 'card_fake_1' };
     },
-    async stream(_chatId, input) {
-      const card = (input as { card?: { initial: unknown; producer: (ctrl: unknown) => Promise<void> } }).card;
-      if (!card) return;
-      cardUpdates.push(card.initial);
-      await card.producer({
-        update: async (next: unknown) => {
-          cardUpdates.push(typeof next === 'function' ? (next as (c: unknown) => unknown)(cardUpdates[cardUpdates.length - 1]) : next);
-        },
-      });
+    async updateCardById(_cardId: string, card: unknown) {
+      cardUpdates.push(card);
+    },
+    async send(_chatId, content) {
+      // Card sends reference a cardId; content updates come via updateCardById.
+      if (!(content as { cardId?: unknown })?.cardId) cardUpdates.push(content);
+      return { messageId: 'om_reply_1' };
     },
     async addReaction() {
       return 'r1';

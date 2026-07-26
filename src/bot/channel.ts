@@ -17,6 +17,9 @@ import { handleCardAction } from '../card/dispatcher';
 import { CallbackAuth } from '../card/callback-auth';
 import { CallbackNonceStore } from '../card/callback-store';
 import { renderCard, type RunCardRenderOptions } from '../card/run-renderer';
+import { registerFeedbackCard } from '../card/feedback-store';
+import { sendManagedCard, updateManagedCard } from '../card/managed';
+import type { Feedback, LedgerStore } from '../observability/ledger';
 import {
   finalizeIfRunning,
   hideFinishedTools,
@@ -169,11 +172,12 @@ export interface StartChannelDeps {
   sessionCatalog?: SessionCatalog;
   workspaces: WorkspaceStore;
   controls: Controls;
+  ledger?: LedgerStore;
   appPaths?: Pick<AppPaths, 'secretsFile' | 'keystoreSaltFile' | 'mediaDir'>;
 }
 
 export async function startChannel(deps: StartChannelDeps): Promise<BridgeChannel> {
-  const { cfg, agent, sessions, sessionCatalog, workspaces, controls } = deps;
+  const { cfg, agent, sessions, sessionCatalog, workspaces, controls, ledger } = deps;
   const activeRuns = new ActiveRuns();
   // ChatModeCache stays per-bridge-instance — invalidated on restart along
   // with everything else. Topic-mode chats only need one chat.get() call ever.
@@ -270,6 +274,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
           activePolicyFingerprints,
           scope,
           mode,
+          ledger,
         });
       } catch (err) {
         log.fail('flush', err);
@@ -299,6 +304,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
           chatModeCache,
           executor,
           pool,
+          ledger,
         }),
       ).catch((err) => log.fail('intake', err));
     },
@@ -322,8 +328,22 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
           chatModeCache,
           callbackAuth,
           callbackPolicyFingerprintForScope: (scope) => activePolicyFingerprints.get(scope),
+          ledger,
         });
       }).catch((err) => log.fail('cardAction', err));
+    },
+    reaction: (evt) => {
+      // 👍/👎 on a bot reply → record into the usage ledger. Feishu shows the
+      // live count natively; we just mirror it for `/report`. Non-thumb
+      // emojis and reactions on non-reply messages are ignored.
+      if (!ledger) return;
+      const dir: Feedback | undefined =
+        evt.emojiType === 'THUMBSUP' ? 'up' : evt.emojiType === 'THUMBSDOWN' ? 'down' : undefined;
+      if (!dir) return;
+      const matched = ledger.recordReaction(evt.messageId, evt.operator.openId, dir, evt.action);
+      if (matched) {
+        log.info('ledger', 'reaction', { messageId: evt.messageId, dir, action: evt.action });
+      }
     },
     comment: async (evt) => {
       await withTrace({ chatId: 'comment' }, async () => {
@@ -495,6 +515,7 @@ interface IntakeDeps {
   chatModeCache: ChatModeCache;
   executor: RunExecutor;
   pool: ProcessPool;
+  ledger?: LedgerStore;
 }
 
 async function intakeMessage(deps: IntakeDeps): Promise<void> {
@@ -511,6 +532,7 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     chatModeCache,
     executor,
     pool,
+    ledger,
   } = deps;
   const preview = msg.content.length > 80 ? `${msg.content.slice(0, 80)}…` : msg.content;
   // Resolve scope (and underlying chat mode) once at intake — every
@@ -582,6 +604,7 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     runExecutor: executor,
     processPool: pool,
     controls,
+    ledger,
   });
   if (handled) {
     const dropped = pending.cancel(scope);
@@ -606,6 +629,7 @@ interface RunBatchDeps {
   activePolicyFingerprints: Map<string, string>;
   scope: string;
   mode: ChatMode;
+  ledger?: LedgerStore;
 }
 
 async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
@@ -622,6 +646,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     activePolicyFingerprints,
     scope,
     mode,
+    ledger,
   } = deps;
   if (batch.length === 0) return;
   const firstMsg = batch[0];
@@ -799,9 +824,14 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     : {};
   // showToolCalls=false → compact card: no tool history, just one live
   // "current activity" panel (thinking / running tool, expandable).
-  const cardRenderOptions = (): RunCardRenderOptions => ({
+  // feedback: 👍 N / 👎 M guidance buttons on the finished card (counts shared
+  // with native emoji reactions via the ledger).
+  const cardRenderOptions = (counts?: { up: number; down: number }): RunCardRenderOptions => ({
     ...signOptions,
     compactActivity: !getShowToolCalls(controls.cfg),
+    // Managed entity card → full-replace updates, never SDK streaming_mode.
+    staticMode: true,
+    ...(ledger ? { feedback: { entryId: execution.runId, ...(counts ? { counts } : {}) } } : {}),
   });
 
   // For non-card modes Claude's output doesn't surface visually until either
@@ -811,54 +841,51 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const reactionPromise =
     replyMode === 'card' ? undefined : addWorkingReaction(channel, lastMsg.messageId);
 
+  // Captured for the usage ledger below, across whichever reply branch runs.
+  // replyMessageId (the bot's reply message) attributes 👍/👎 reactions back
+  // to this interaction. It's resolved via a promise so the ledger record in
+  // `finally` can await it without racing the async stream-result capture.
+  let finalRunState: RunState = initialState;
+  let resolveReplyMessageId: (id: string | undefined) => void = () => {};
+  const replyMessageIdReady = new Promise<string | undefined>((res) => {
+    resolveReplyMessageId = res;
+  });
+
   try {
     if (replyMode === 'card') {
-      let latestState: RunState = initialState;
-      let producerStarted = false;
-      let cardCtrl:
-        | { update(next: object | ((current: object) => object)): Promise<void> }
-        | undefined;
-      const renderDone = processAgentStream(
+      // Managed CardKit entity card (createCard + updateCardById). Unlike the
+      // inline streaming card, entity updates push live to clients and survive
+      // button-click callbacks — so 👍/👎 vote counts refresh reliably. We
+      // throttle updates during the run to stay under card-update rate limits.
+      const { messageId } = await sendManagedCard(
+        channel,
+        chatId,
+        renderCard(initialState, cardRenderOptions()),
+        { ...(sendOpts.replyTo ? { replyTo: sendOpts.replyTo } : {}), ...(sendOpts.replyInThread ? { replyInThread: true } : {}) },
+      );
+      resolveReplyMessageId(messageId);
+      const updater = new ManagedCardUpdater((card) => updateManagedCard(channel, messageId, card));
+      const finalState = await processAgentStream(
         handle,
         eventStream,
         scope,
         idleTimeoutMs,
         recordSession,
         async (state) => {
-          latestState = state;
-          if (cardCtrl) {
-            await cardCtrl.update(renderCard(state, cardRenderOptions()));
-          }
+          finalRunState = state;
+          updater.schedule(renderCard(state, cardRenderOptions()));
         },
       );
-      const streamDone = channel.stream(
-        chatId,
-        {
-          card: {
-            initial: renderCard(initialState, cardRenderOptions()),
-            producer: async (ctrl) => {
-              producerStarted = true;
-              cardCtrl = ctrl;
-              await ctrl.update(renderCard(latestState, cardRenderOptions()));
-              await renderDone;
-            },
-          },
-        },
-        sendOpts,
-      );
-      await awaitRenderAwareStream({
-        mode: replyMode,
-        streamDone,
-        renderDone,
-        producerStarted: () => producerStarted,
-        fallback: async (state) => {
-          await channel.send(
-            chatId,
-            { card: renderCard(state, cardRenderOptions()) },
-            sendOpts,
-          );
-        },
-      });
+      finalRunState = finalState;
+      await updater.flush(renderCard(finalState, cardRenderOptions()));
+      // Register the feedback re-render so a 👍/👎 button click can refresh
+      // the counts via the same reliable entity-update path.
+      if (ledger && finalState.terminal === 'done') {
+        registerFeedbackCard(messageId, {
+          entryId: execution.runId,
+          update: (counts) => updateManagedCard(channel, messageId, renderCard(finalState, cardRenderOptions(counts))),
+        });
+      }
     } else if (replyMode === 'markdown') {
       let latestState: RunState = initialState;
       let producerStarted = false;
@@ -871,6 +898,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         recordSession,
         async (state) => {
           latestState = state;
+          finalRunState = state;
           if (markdownCtrl) {
             await markdownCtrl.setContent(renderText(filterForPrefs(state)));
           }
@@ -888,6 +916,9 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         },
         sendOpts,
       );
+      void streamDone
+        .then((r) => resolveReplyMessageId((r as { messageId?: string } | undefined)?.messageId))
+        .catch(() => resolveReplyMessageId(undefined));
       await awaitRenderAwareStream({
         mode: replyMode,
         streamDone,
@@ -896,7 +927,10 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         fallback: async (state) => {
           const body = renderText(filterForPrefs(state));
           if (body.trim()) {
-            await channel.send(chatId, { markdown: body }, sendOpts);
+            const sent = await channel.send(chatId, { markdown: body }, sendOpts);
+            resolveReplyMessageId((sent as { messageId?: string } | undefined)?.messageId);
+          } else {
+            resolveReplyMessageId(undefined);
           }
         },
       });
@@ -912,9 +946,13 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         recordSession,
         async () => {},
       );
+      finalRunState = finalState;
       const body = renderText(filterForPrefs(finalState));
       if (body.trim()) {
-        await channel.send(chatId, { markdown: body }, sendOpts);
+        const sent = await channel.send(chatId, { markdown: body }, sendOpts);
+        resolveReplyMessageId((sent as { messageId?: string } | undefined)?.messageId);
+      } else {
+        resolveReplyMessageId(undefined);
       }
     }
   } catch (err) {
@@ -922,6 +960,34 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   } finally {
     activePolicyFingerprints.delete(scope);
     scheduleWorkingReactionCleanup(channel, lastMsg.messageId, reactionPromise);
+    if (ledger) {
+      const usage = finalRunState.usage;
+      // Wait briefly for the reply message id (needed to attribute reactions);
+      // don't hang the queue if the stream never surfaced one.
+      const replyMessageId = await Promise.race([
+        replyMessageIdReady,
+        delay(1500).then(() => undefined),
+      ]);
+      ledger.record({
+        id: execution.runId,
+        openId: firstMsg.senderId,
+        ...(firstMsg.senderName ? { name: firstMsg.senderName } : {}),
+        chatId,
+        chatKind: mode,
+        ...(usage?.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
+        ...(usage?.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+        ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+        ...(replyMessageId ? { replyMessageId } : {}),
+      });
+      log.info('ledger', 'record', {
+        scope,
+        chatKind: mode,
+        replyMessageId,
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+        costUsd: usage?.costUsd,
+      });
+    }
   }
 }
 
@@ -1163,6 +1229,56 @@ function scheduleWorkingReactionCleanup(
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Coalescing, serialized, time-throttled updater for a managed entity card.
+ * During a run the agent flushes on every token, but entity card updates are
+ * rate-limited — so we keep only the newest render and send at most one
+ * update per `minIntervalMs`. `flush()` forces the final state through and
+ * awaits it. Sends are chained (FIFO) so `updateCardById` sequence numbers
+ * stay monotonic.
+ */
+class ManagedCardUpdater {
+  private latest: object | undefined;
+  private chain: Promise<void> = Promise.resolve();
+  private timer: NodeJS.Timeout | undefined;
+  private lastAt = 0;
+
+  constructor(
+    private readonly send: (card: object) => Promise<void>,
+    private readonly minIntervalMs = 350,
+  ) {}
+
+  schedule(card: object): void {
+    this.latest = card;
+    if (this.timer) return;
+    const wait = Math.max(0, this.minIntervalMs - (Date.now() - this.lastAt));
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.fire();
+    }, wait);
+  }
+
+  private fire(): void {
+    const card = this.latest;
+    if (card === undefined) return;
+    this.latest = undefined;
+    this.lastAt = Date.now();
+    this.chain = this.chain
+      .then(() => this.send(card))
+      .catch((err: unknown) => log.fail('card', err, { step: 'managed-throttled-update' }));
+  }
+
+  async flush(card: object): Promise<void> {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    this.latest = card;
+    this.fire();
+    await this.chain;
+  }
 }
 
 function buildPrompt(

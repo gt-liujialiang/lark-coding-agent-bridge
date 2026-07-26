@@ -50,6 +50,7 @@ export interface FakeChannel {
   };
   createCard(cardJson: unknown): Promise<{ cardId: string }>;
   updateCardById(cardId: string, cardJson: unknown, sequence: number): Promise<void>;
+  updateCard(messageId: string, card: unknown): Promise<void>;
   send(chatId: string, content: unknown, options?: unknown): Promise<{ messageId: string }>;
   stream(chatId: string, input: unknown, options?: unknown): Promise<void>;
 }
@@ -128,6 +129,9 @@ export function createFakeChannel(): FakeChannel {
     },
     async updateCardById(cardId: string, cardJson: unknown, sequence: number): Promise<void> {
       requests.push({ method: 'cardkit.v1.card.update', params: { cardId, cardJson, sequence } });
+    },
+    async updateCard(messageId: string, card: unknown): Promise<void> {
+      requests.push({ method: 'im.v1.message.patch', params: { messageId, card } });
     },
     async send(chatId: string, content: unknown, options?: unknown): Promise<{ messageId: string }> {
       // Resolve a `{ cardId }` reference back to the card JSON so assertions

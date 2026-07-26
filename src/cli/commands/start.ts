@@ -43,6 +43,7 @@ import {
 import { resolveProfileRuntime } from '../../runtime/profile-runtime';
 import { refreshOwnerControls } from '../../policy/owner';
 import { SessionStore } from '../../session/store';
+import { LedgerStore } from '../../observability/ledger';
 import { SessionCatalog } from '../../session/catalog';
 import { WorkspaceStore } from '../../workspace/store';
 
@@ -143,6 +144,8 @@ export async function runStart(opts: StartOptions): Promise<void> {
           await sessionCatalog.load();
           const workspaces = new WorkspaceStore(appPaths.workspacesFile);
           await workspaces.load();
+          const ledger = new LedgerStore(appPaths.ledgerFile);
+          await ledger.load();
 
         await gcMediaCache(MEDIA_GC_MAX_AGE_MS, appPaths.mediaDir);
         await gcOldLogs();
@@ -272,6 +275,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
                   sessions,
                   sessionCatalog,
                   workspaces,
+                  ledger,
                   controls: nextControls,
                   appPaths: nextRuntime.appPaths,
                 });
@@ -328,6 +332,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
           sessions,
           sessionCatalog,
           workspaces,
+          ledger,
           controls,
           appPaths,
         });

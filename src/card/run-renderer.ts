@@ -24,6 +24,21 @@ export interface RunCardRenderOptions {
    * on-demand expansion; the finished card is just the answer.
    */
   compactActivity?: boolean;
+  /**
+   * When set, a 👍 N / 👎 M vote row is shown once the run finishes normally,
+   * guiding people to rate the reply. `entryId` rides on the button so a click
+   * is attributed; `counts` are the current tallies (shared with native emoji
+   * reactions — one vote per person). Buttons persist; only the counts change.
+   */
+  feedback?: { entryId: string; counts?: { up: number; down: number } };
+  /**
+   * Force `config.streaming_mode: false`. Set for managed entity cards, which
+   * update via full-card `updateCardById` replaces (not element-level stream
+   * APIs). Leaving streaming_mode on would put the card in a streaming
+   * lifecycle that only `card.settings` can exit — so post-run updates (final
+   * state, 👍/👎 counts) wouldn't render. Full replaces don't need it.
+   */
+  staticMode?: boolean;
 }
 
 export function renderCard(state: RunState, options: RunCardRenderOptions = {}): object {
@@ -70,13 +85,43 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
   const usageNote = usageFooter(state.usage);
   if (usageNote) elements.push(usageNote);
 
+  if (options.feedback && state.terminal === 'done') {
+    elements.push(feedbackRow(options.feedback));
+  }
+
   return {
     schema: '2.0',
     config: {
-      streaming_mode: state.terminal === 'running',
+      streaming_mode: state.terminal === 'running' && !options.staticMode,
       summary: { content: summaryText(state) },
     },
     body: { elements },
+  };
+}
+
+/** 👍 N / 👎 M guidance row on a finished card. Buttons persist after a click
+ * and just update their count (one vote per person, shared with native emoji
+ * reactions via the ledger). Payload is unsigned `{cmd:'fb', arg, fb_id}`;
+ * the dispatcher gates it on the same access check as any card action. */
+function feedbackRow(feedback: NonNullable<RunCardRenderOptions['feedback']>): object {
+  const counts = feedback.counts ?? { up: 0, down: 0 };
+  const btn = (arg: 'up' | 'down', text: string): object => ({
+    tag: 'column',
+    width: 'auto',
+    elements: [
+      {
+        tag: 'button',
+        text: { tag: 'plain_text', content: text },
+        type: 'default',
+        size: 'tiny',
+        behaviors: [{ type: 'callback', value: { cmd: 'fb', arg, fb_id: feedback.entryId } }],
+      },
+    ],
+  });
+  return {
+    tag: 'column_set',
+    horizontal_spacing: 'small',
+    columns: [btn('up', `👍 ${counts.up}`), btn('down', `👎 ${counts.down}`)],
   };
 }
 
