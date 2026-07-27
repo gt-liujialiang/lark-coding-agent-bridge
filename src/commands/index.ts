@@ -26,6 +26,7 @@ import type {
 } from '../config/schema';
 import {
   getAgentStopGraceMs,
+  getClaudeDriver,
   getMaxConcurrentRuns,
   getMessageReplyMode,
   getReplyInThreadInGroup,
@@ -1940,6 +1941,7 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
     runIdleTimeoutMinutes: ms ? Math.round(ms / 60_000) : 0,
     requireMentionInGroup: getRequireMentionInGroup(ctx.controls.cfg),
     replyInThreadInGroup: getReplyInThreadInGroup(ctx.controls.cfg),
+    claudeDriver: getClaudeDriver(ctx.controls.cfg),
     larkCliIdentity: ctx.controls.profileConfig.larkCli.identityPreset,
     allowedUsers: access.allowedUsers,
     allowedChats: access.allowedChats,
@@ -2037,6 +2039,9 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
   if (rawReplyInThread === 'yes') replyInThreadInGroup = true;
   else if (rawReplyInThread === 'no') replyInThreadInGroup = false;
   else replyInThreadInGroup = getReplyInThreadInGroup(ctx.controls.cfg);
+  const rawDriver = String(fv.claude_driver ?? '').trim();
+  const claudeDriver: 'pty' | 'headless' =
+    rawDriver === 'headless' ? 'headless' : 'pty';
   const rawLarkCliIdentity = String(fv.lark_cli_identity ?? '').trim();
   const larkCliIdentity =
     rawLarkCliIdentity === 'user-default' || rawLarkCliIdentity === 'bot-only'
@@ -2077,6 +2082,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       runIdleTimeoutMinutes,
       requireMentionInGroup,
       replyInThreadInGroup,
+      claudeDriver,
     };
 
     let failureStep = 'config.save';
@@ -2140,6 +2146,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
         runIdleTimeoutMinutes,
         requireMentionInGroup,
         replyInThreadInGroup,
+        claudeDriver,
         larkCliIdentity,
         allowedUsers: access.allowedUsers,
         allowedChats: access.allowedChats,
