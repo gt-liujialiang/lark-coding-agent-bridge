@@ -13,6 +13,8 @@ export interface ConfigFormOpts {
   runIdleTimeoutMinutes: number;
   requireMentionInGroup: boolean;
   replyInThreadInGroup: boolean;
+  /** claude 驱动方式。默认 'pty'。 */
+  claudeDriver: 'pty' | 'headless';
   larkCliIdentity: LarkCliIdentityPreset;
   allowedUsers: string[];
   allowedChats: string[];
@@ -227,6 +229,22 @@ export function configFormCard(opts: ConfigFormOpts): object {
             {
               tag: 'markdown',
               content:
+                '\n**Claude 驱动方式**\n' +
+                '_PTY(默认):伪终端常驻,支持交互式问答和长任务探活;需 node-pty_\n' +
+                '_Headless:claude -p 无头模式,工具渲染更干净,一轮一进程_',
+            },
+            {
+              tag: 'select_static',
+              name: 'claude_driver',
+              initial_option: opts.claudeDriver,
+              options: [
+                { text: { tag: 'plain_text', content: 'PTY(默认)' }, value: 'pty' },
+                { text: { tag: 'plain_text', content: 'Headless' }, value: 'headless' },
+              ],
+            },
+            {
+              tag: 'markdown',
+              content:
                 '\n**lark-cli 身份策略**\n' +
                 '_只允许应用身份:使用 bot/app 能力,不访问个人资源_\n' +
                 '_允许用户身份:保留应用身份,并允许已授权用户访问个人日历、邮箱、云盘等资源_',
@@ -312,7 +330,8 @@ export function configSavedCard(opts: ConfigFormOpts): object {
             `**并发上限**:\`${opts.maxConcurrentRuns}\`\n` +
             `**run 探活**:\`${opts.runIdleTimeoutMinutes > 0 ? `${opts.runIdleTimeoutMinutes} 分钟` : '关闭'}\`\n` +
             `**群里需要 @ bot**:\`${opts.requireMentionInGroup ? '是' : '否'}\`\n` +
-            `**群聊话题回复**:\`${opts.replyInThreadInGroup ? '是' : '否'}\`\n\n` +
+            `**群聊话题回复**:\`${opts.replyInThreadInGroup ? '是' : '否'}\`\n` +
+            `**Claude 驱动**:\`${opts.claudeDriver === 'headless' ? 'Headless' : 'PTY'}\`\n\n` +
             `**lark-cli 身份策略**:\`${opts.larkCliIdentity === 'user-default' ? '允许用户身份' : '只允许应用身份'}\`\n\n` +
             '🔒 **访问控制**\n' +
             `**允许私聊的用户**:${summarize(opts.allowedUsers)}\n` +
