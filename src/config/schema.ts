@@ -71,6 +71,9 @@ export type MessageReplyMode = 'card' | 'markdown' | 'text';
 /** Tool-call rendering mode. See `AppPreferences.toolCallDisplay`. */
 export type ToolCallDisplay = 'full' | 'compact' | 'hide';
 
+const CLAUDE_DRIVER_OPTIONS = ['pty', 'headless'] as const;
+export type ClaudeDriver = (typeof CLAUDE_DRIVER_OPTIONS)[number];
+
 /**
  * Access control settings. Empty lists are fail-closed in the v2 policy:
  * no DM senders, no group chats, and only the runtime owner can administer
@@ -175,6 +178,12 @@ export interface AppPreferences {
    * topics are unaffected by this flag.
    */
   claudeP2pAutoApprove?: boolean;
+  /**
+   * How claude is driven. `pty` (default) uses a long-lived pseudo-terminal
+   * with JSONL log tailing; `headless` uses `claude -p --output-format
+   * stream-json` (one process per turn, no TUI interactions).
+   */
+  claudeDriver?: ClaudeDriver;
 }
 
 /**
@@ -278,6 +287,21 @@ function isValidToolCallDisplay(v: unknown): v is ToolCallDisplay {
  */
 export function getShowToolCalls(cfg: AppConfig): boolean {
   return getToolCallDisplay(cfg, false) !== 'hide';
+}
+
+/**
+ * Resolve the claude driver mode. Default `'pty'` — the `!== 'headless'`
+ * check makes older configs without the field inherit the default.
+ *
+ * - `pty`: long-lived PTY + JSONL tailing (supports AskUserQuestion,
+ *   idle checkpoint, …)
+ * - `headless`: `claude -p --output-format stream-json` (stateless,
+ *   one process per turn, clean tool rendering)
+ */
+export function getClaudeDriver(cfg: AppConfig): ClaudeDriver {
+  const v = cfg.preferences?.claudeDriver;
+  if (v === 'headless') return 'headless';
+  return 'pty';
 }
 
 /** Resolve the max-concurrent-runs preference with default + sanity clamp. */
