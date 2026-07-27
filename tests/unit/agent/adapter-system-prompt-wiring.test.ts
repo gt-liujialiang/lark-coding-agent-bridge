@@ -24,6 +24,7 @@ import {
   buildBridgeSystemPrompt,
   prefixBridgeSystemPrompt,
 } from '../../../src/agent/bridge-system-prompt';
+import { ClaudeHeadlessAdapter } from '../../../src/agent/claude/adapter';
 import { ClaudePtyAdapter } from '../../../src/agent/claude/pty-adapter';
 import { CodexAdapter } from '../../../src/agent/codex/adapter';
 import type { PtyHandle } from '../../../src/agent/claude/pty';
@@ -136,6 +137,47 @@ describe('ClaudePtyAdapter system prompt wiring', () => {
     expect(capturedArgs).toBeDefined();
     const flagIndex = capturedArgs!.indexOf('--append-system-prompt');
     expect(capturedArgs![flagIndex + 1]).toBe(buildBridgeSystemPrompt(undefined));
+  });
+});
+
+describe('ClaudeHeadlessAdapter system prompt wiring', () => {
+  it('appends the identity-aware bridge system prompt after setBotIdentity', () => {
+    const child = fakeChild();
+    spawnMock.spawnProcess.mockReturnValue(child);
+
+    const adapter = new ClaudeHeadlessAdapter();
+    adapter.setBotIdentity({ openId: 'ou_bot_self', name: 'Bridge' });
+
+    adapter.run({ runId: 'r1', prompt: 'hi', cwd: '/tmp' });
+
+    const args = spawnMock.spawnProcess.mock.calls[0]?.[1] as string[];
+    const flagIndex = args.indexOf('--append-system-prompt');
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(args[flagIndex + 1]).toBe(
+      buildBridgeSystemPrompt({ openId: 'ou_bot_self', name: 'Bridge' }),
+    );
+  });
+
+  it('falls back to the base system prompt when no identity was set', () => {
+    const child = fakeChild();
+    spawnMock.spawnProcess.mockReturnValue(child);
+
+    const adapter = new ClaudeHeadlessAdapter();
+
+    adapter.run({ runId: 'r1', prompt: 'hi', cwd: '/tmp' });
+
+    const args = spawnMock.spawnProcess.mock.calls[0]?.[1] as string[];
+    const flagIndex = args.indexOf('--append-system-prompt');
+    expect(args[flagIndex + 1]).toBe(buildBridgeSystemPrompt(undefined));
+  });
+
+  it('requests token-level partial messages so replies stream incrementally', () => {
+    spawnMock.spawnProcess.mockReturnValue(fakeChild());
+
+    new ClaudeHeadlessAdapter().run({ runId: 'r1', prompt: 'hi', cwd: '/tmp' });
+
+    const args = spawnMock.spawnProcess.mock.calls[0]?.[1] as string[];
+    expect(args).toContain('--include-partial-messages');
   });
 });
 
