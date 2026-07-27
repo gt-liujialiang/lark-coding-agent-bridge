@@ -3,6 +3,7 @@ import os from 'node:os';
 import { createInterface } from 'node:readline';
 import pkg from '../../../package.json';
 import { ClaudePtyAdapter } from '../../agent/claude/pty-adapter';
+import { ClaudeHeadlessAdapter } from '../../agent/claude/adapter';
 import { CodexAdapter } from '../../agent/codex/adapter';
 import {
   AgentPreflightError,
@@ -18,7 +19,7 @@ import {
   type ProfileConfig,
 } from '../../config/profile-schema';
 import type { AppConfig } from '../../config/schema';
-import { isComplete } from '../../config/schema';
+import { isComplete, getClaudeDriver } from '../../config/schema';
 import { configureLogger, gcOldLogs, log, reportError } from '../../core/logger';
 import { loadTelemetryAdapter, telemetry } from '../../core/telemetry';
 import { gcMediaCache } from '../../media/cache';
@@ -121,7 +122,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
     hostname: os.hostname(),
   });
 
-  let agent = createRuntimeAgent(profileConfig, { ...appPaths, configPath });
+  let agent = createRuntimeAgent(profileConfig, { ...appPaths, configPath }, cfg);
   const availability = await checkRuntimeAgentAvailability(agent);
   if (!availability.ok) {
     console.error(formatAgentPreflightDiagnostic(availability.diagnostic));
@@ -245,7 +246,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
                 const nextAgent = createRuntimeAgent(nextRuntime.profileConfig, {
                   ...nextRuntime.appPaths,
                   configPath: nextRuntime.configPath,
-                });
+                }, next);
                 const nextAvailability = await checkRuntimeAgentAvailability(nextAgent);
                 if (!nextAvailability.ok) {
                   throw nextAvailability.error;
@@ -409,6 +410,7 @@ export function createRuntimeAgent(
     Partial<Pick<AppPaths, 'rootDir' | 'profile' | 'configFile' | 'larkCliConfigDir' | 'larkCliSourceConfigFile'>> & {
       configPath?: string;
     },
+  cfg?: AppConfig,
 ): AgentAdapter {
   const larkChannelConfigPath = appPaths.configPath ?? appPaths.configFile;
   const larkChannel =
@@ -438,6 +440,9 @@ export function createRuntimeAgent(
       sandbox: profileConfig.sandbox.defaultMode,
       larkChannel,
     });
+  }
+  if (cfg && getClaudeDriver(cfg) === 'headless') {
+    return new ClaudeHeadlessAdapter({ larkChannel });
   }
   return new ClaudePtyAdapter({ larkChannel });
 }
