@@ -13,6 +13,7 @@ import {
   type BridgePromptQuotedMessage,
 } from '../agent/prompt';
 import type { AgentAdapter, AgentEvent } from '../agent/types';
+import { AskQuestionFlow } from './ask-question-flow';
 import { handleCardAction } from '../card/dispatcher';
 import { CallbackAuth } from '../card/callback-auth';
 import { CallbackNonceStore } from '../card/callback-store';
@@ -22,24 +23,24 @@ import { sendManagedCard, updateManagedCard } from '../card/managed';
 import type { Feedback, LedgerStore } from '../observability/ledger';
 import {
   finalizeIfRunning,
-  hideFinishedTools,
   initialState,
   markIdleTimeout,
   markInterrupted,
   reduce,
   type RunState,
 } from '../card/run-state';
-import { renderText } from '../card/text-renderer';
+import { renderText, type RenderTextOptions } from '../card/text-renderer';
 import { tryHandleCommand, type Controls } from '../commands';
 import type { AppConfig } from '../config/schema';
 import {
   getAgentStopGraceMs,
+  getClaudeP2pAutoApprove,
   getMaxConcurrentRuns,
   getMessageReplyMode,
   getRequireMentionInGroup,
   getReplyInThreadInGroup,
   getRunIdleTimeoutMs,
-  getShowToolCalls,
+  getToolCallDisplay,
 } from '../config/schema';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { log, reportMetric, withTrace } from '../core/logger';
@@ -738,6 +739,8 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     workspaces,
     executor,
     now: Date.now(),
+    chatMode: mode,
+    claudeP2pAutoApprove: getClaudeP2pAutoApprove(controls.cfg),
     stopGraceMs: getAgentStopGraceMs(controls.cfg),
     observability: {
       profile: controls.profile,
@@ -799,15 +802,13 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const replyMode = getMessageReplyMode(controls.cfg);
   log.info('flush', 'reply-mode', { mode: replyMode });
 
-  // Re-read prefs on every flush so toggling /config mid-stream takes
-  // effect immediately. Cheap object lookups, no allocation when on.
-  // showToolCalls=false in non-card modes hides finished tool history but
-  // keeps the currently-running tool visible so users can see what's
-  // executing right now; card mode gets compactActivity instead (below).
-  const filterForPrefs = (state: RunState): RunState => {
-    if (getShowToolCalls(controls.cfg)) return state;
-    return hideFinishedTools(state);
-  };
+  // Re-read prefs on every flush so toggling /config mid-stream takes effect
+  // immediately (cheap lookups). Resolve tool-call display once per flush:
+  // group override in group / topic chats, base pref in p2p. The renderer
+  // applies the mode; `/config` changes take effect on the next user message.
+  const isGroupChat = mode !== 'p2p';
+  const toolDisplay = getToolCallDisplay(controls.cfg, isGroupChat);
+  log.info('flush', 'tool-display', { mode: toolDisplay, isGroup: isGroupChat });
   const signOptions = callbackAuth
     ? {
         signCallback: (action: string) =>
@@ -822,17 +823,40 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           }),
       }
     : {};
-  // showToolCalls=false → compact card: no tool history, just one live
-  // "current activity" panel (thinking / running tool, expandable).
-  // feedback: 👍 N / 👎 M guidance buttons on the finished card (counts shared
-  // with native emoji reactions via the ledger).
+  // Managed entity card render options (a function so a 👍/👎 click can
+  // re-render with fresh counts). `toolDisplay` selects the tri-state tool
+  // rendering; `staticMode` forces full-replace updates (managed cards don't
+  // use SDK streaming_mode); `feedback` adds the 👍 N / 👎 M row on the
+  // finished card (counts shared with native emoji reactions via the ledger).
   const cardRenderOptions = (counts?: { up: number; down: number }): RunCardRenderOptions => ({
     ...signOptions,
-    compactActivity: !getShowToolCalls(controls.cfg),
-    // Managed entity card → full-replace updates, never SDK streaming_mode.
+    toolDisplay,
     staticMode: true,
     ...(ledger ? { feedback: { entryId: execution.runId, ...(counts ? { counts } : {}) } } : {}),
   });
+  const textRenderOptions: RenderTextOptions = { toolDisplay };
+
+  // Bind an AskQuestionFlow to this run so the card dispatcher can route
+  // AskUserQuestion button clicks back here. Only when callbackAuth is
+  // available — without it, we can't sign the bridge_token the buttons need.
+  if (callbackAuth && handle.run.answerQuestion) {
+    handle.askQuestion = new AskQuestionFlow({
+      run: handle.run,
+      channel,
+      chatId,
+      sendOpts,
+      signBridgeToken: (action: string) =>
+        callbackAuth.sign({
+          runId: execution.runId,
+          scope,
+          chatId,
+          operatorOpenId: firstMsg.senderId,
+          action,
+          policyFingerprint: flow.policy.policyFingerprint,
+          ttlMs: 24 * 60 * 60 * 1000,
+        }),
+    });
+  }
 
   // For non-card modes Claude's output doesn't surface visually until either
   // a first streamed token (markdown mode) or the whole run ends (text mode).
@@ -850,6 +874,12 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const replyMessageIdReady = new Promise<string | undefined>((res) => {
     resolveReplyMessageId = res;
   });
+
+  // Idle checkpoints (PtySession's 3/10/30-min check-ins) intentionally do NOT
+  // send a card — a brand-new message per check-in fragmented the chat. The
+  // event is still consumed in processAgentStream to disable the channel idle
+  // watchdog so long-running turns aren't killed; it just renders nothing, so
+  // no `onIdleCheckpoint` handler is passed below.
 
   try {
     if (replyMode === 'card') {
@@ -875,6 +905,12 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           finalRunState = state;
           updater.schedule(renderCard(state, cardRenderOptions()));
         },
+        // AskUserQuestion continuation updates the ORIGINAL streaming card in
+        // place instead of posting a new card — passing no `flushNewCard`
+        // keeps processAgentStream from freezing + re-sending (see its body).
+        undefined,
+        // Idle checkpoints render nothing (see note above) — no handler.
+        undefined,
       );
       finalRunState = finalState;
       await updater.flush(renderCard(finalState, cardRenderOptions()));
@@ -900,9 +936,11 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           latestState = state;
           finalRunState = state;
           if (markdownCtrl) {
-            await markdownCtrl.setContent(renderText(filterForPrefs(state)));
+            await markdownCtrl.setContent(renderText(state, textRenderOptions));
           }
         },
+        undefined,
+        undefined,
       );
       const streamDone = channel.stream(
         chatId,
@@ -910,7 +948,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           markdown: async (ctrl) => {
             producerStarted = true;
             markdownCtrl = ctrl;
-            await ctrl.setContent(renderText(filterForPrefs(latestState)));
+            await ctrl.setContent(renderText(latestState, textRenderOptions));
             await renderDone;
           },
         },
@@ -925,7 +963,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         renderDone,
         producerStarted: () => producerStarted,
         fallback: async (state) => {
-          const body = renderText(filterForPrefs(state));
+          const body = renderText(state, textRenderOptions);
           if (body.trim()) {
             const sent = await channel.send(chatId, { markdown: body }, sendOpts);
             resolveReplyMessageId((sent as { messageId?: string } | undefined)?.messageId);
@@ -945,9 +983,11 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         idleTimeoutMs,
         recordSession,
         async () => {},
+        undefined,
+        undefined,
       );
       finalRunState = finalState;
-      const body = renderText(filterForPrefs(finalState));
+      const body = renderText(finalState, textRenderOptions);
       if (body.trim()) {
         const sent = await channel.send(chatId, { markdown: body }, sendOpts);
         resolveReplyMessageId((sent as { messageId?: string } | undefined)?.messageId);
@@ -1003,9 +1043,30 @@ async function processAgentStream(
   idleTimeoutMs: number | undefined,
   recordSession: (event: AgentEvent) => void,
   flush: (state: RunState) => Promise<void>,
+  /**
+   * When provided and an `ask_user_question` event arrives mid-turn, the
+   * current streaming card is finalized via `flush` and all subsequent
+   * events are accumulated into a fresh `RunState`. On terminal, that
+   * accumulated state is rendered via `flushNewCard` instead of updating
+   * the original card — the user sees the post-answer reply as a new
+   * message.
+   */
+  flushNewCard?: (state: RunState) => Promise<void>,
+  /**
+   * Fires when PtySession emits an `idle_checkpoint` (long turn going quiet).
+   * Caller renders + sends a check-in card. The handler also permanently
+   * disables this turn's channel-level idle watchdog — once the user has been
+   * notified, further killing is user-driven via the card's [立即终止] button,
+   * not by the channel timer.
+   */
+  onIdleCheckpoint?: (event: Extract<AgentEvent, { type: 'idle_checkpoint' }>) => Promise<void>,
 ): Promise<RunState> {
   const runStart = Date.now();
   let state: RunState = initialState;
+  /** When defined, we're in the post-AskUserQuestion accumulation phase.
+   * Events go here instead of into `state`; on terminal we render this as
+   * a new card. Stays `undefined` for runs that never call AskUserQuestion. */
+  let postAskState: RunState | undefined;
 
   // Idle watchdog: claude going silent for `idleTimeoutMs` is treated as
   // "presumed hung", we stop() and surface a timeout marker on the card.
@@ -1024,8 +1085,22 @@ async function processAgentStream(
   let idleFired = false;
   let timer: NodeJS.Timeout | undefined;
   const inFlightTools = new Set<string>();
+  // Subset of `inFlightTools` that are `ask_user_question` tool_use_ids.
+  // While non-empty, claude is intentionally waiting for the user to click
+  // an option on a Lark interactive card; surfacing the idle-checkpoint
+  // check-in card here would push that card down in the chat and confuse
+  // the user. Suppress check-in dispatch (and keep the watchdog state
+  // untouched) while this set is non-empty. Cleared by the matching
+  // `tool_result` synthesized after the user's click.
+  const pendingAskQuestions = new Set<string>();
+  // Flipped on the first `idle_checkpoint` event of this turn: the user has
+  // been (or is about to be) prompted via the check-in card, so the bridge
+  // shouldn't unilaterally kill the run anymore. From here on, termination
+  // happens only via the card's [立即终止] button (→ run.stop()) or a real
+  // agent terminal event.
+  let watchdogDisabled = false;
   const armOrPauseIdle = (): void => {
-    if (!idleTimeoutMs) return;
+    if (!idleTimeoutMs || watchdogDisabled) return;
     if (timer) clearTimeout(timer);
     timer = undefined;
     if (inFlightTools.size > 0) return;
@@ -1055,12 +1130,82 @@ async function processAgentStream(
         });
       } else if (evt.type === 'tool_result') {
         inFlightTools.delete(evt.id);
+        pendingAskQuestions.delete(evt.id);
         log.info('agent', 'tool-done', { inFlight: inFlightTools.size });
       }
       armOrPauseIdle();
 
       if (evt.type === 'system') {
         recordSession(evt);
+        continue;
+      }
+      if (evt.type === 'ask_user_question') {
+        if (handle.askQuestion) {
+          try {
+            await handle.askQuestion.start(evt.id, evt.questions);
+          } catch (err) {
+            log.fail('agent', err, { event: 'ask-question-start' });
+          }
+        } else {
+          log.warn('agent', 'ask-question-no-flow-bound', { toolUseId: evt.id });
+        }
+        // Treat the AskUserQuestion as a tool in-flight: claude is waiting
+        // on the user. Adding to the set pauses the idle watchdog so the
+        // user can take their time clicking. The matching `tool_result`
+        // (synthesised by claude after the keystroke) clears it.
+        // Also track in `pendingAskQuestions` so the idle-checkpoint handler
+        // knows to stay silent while a click is outstanding.
+        inFlightTools.add(evt.id);
+        pendingAskQuestions.add(evt.id);
+        armOrPauseIdle();
+        // Finalize the streaming card now and start a fresh accumulator
+        // for the post-answer phase, so claude's reply after the click
+        // arrives as a *new* card via flushNewCard instead of being
+        // appended to the in-progress one.
+        if (flushNewCard && postAskState === undefined) {
+          state = { ...state, terminal: 'done' as const, footer: null };
+          await flush(state);
+          postAskState = initialState;
+        }
+        continue;
+      }
+      if (evt.type === 'idle_checkpoint') {
+        // Surface long-running turn status to the user. Don't terminate, don't
+        // mutate the streaming card — the check-in card goes out as its own
+        // new message. From now on the channel watchdog stays off for the
+        // remainder of this turn (see `watchdogDisabled` declaration).
+        //
+        // Exception: when an `AskUserQuestion` card is awaiting the user's
+        // click, claude is deliberately silent and a check-in card here
+        // would only bury the question card in chat history. Stay silent
+        // and leave the watchdog state untouched — when the user finally
+        // clicks, claude resumes, the PtySession resets cadence on the next
+        // JSONL entry, and check-ins behave normally again.
+        const suppressedForAq = pendingAskQuestions.size > 0;
+        log.info('agent', 'idle-checkpoint', {
+          scope,
+          checkpointNumber: evt.checkpointNumber,
+          idleMs: evt.idleMs,
+          inFlight: evt.snapshot.inFlightTools.map((t) => t.name),
+          ...(suppressedForAq ? { suppressed: 'pending-ask-user-question' } : {}),
+        });
+        if (suppressedForAq) {
+          continue;
+        }
+        if (!watchdogDisabled) {
+          watchdogDisabled = true;
+          if (timer) {
+            clearTimeout(timer);
+            timer = undefined;
+          }
+        }
+        if (onIdleCheckpoint) {
+          try {
+            await onIdleCheckpoint(evt);
+          } catch (err) {
+            log.fail('agent', err, { event: 'idle-checkpoint' });
+          }
+        }
         continue;
       }
       if (evt.type === 'usage') {
@@ -1082,6 +1227,33 @@ async function processAgentStream(
         // usage never changes footer/terminal, so no transition log is needed.
         state = reduce(state, evt);
         await flush(state);
+        continue;
+      }
+
+      if (postAskState !== undefined) {
+        // Post-AskUserQuestion phase: claude's reply belongs to a new card.
+        // Accumulate into postAskState; the original streaming card stays
+        // at its frozen "normal" terminal. On terminal, render postAskState
+        // as a new card via flushNewCard. The streaming card never updates
+        // again.
+        const prev = postAskState;
+        postAskState = reduce(postAskState, evt);
+        if (postAskState.footer !== prev.footer || postAskState.terminal !== prev.terminal) {
+          log.info('card', 'post-ask-transition', {
+            footer: postAskState.footer,
+            terminal: postAskState.terminal,
+          });
+        }
+        if (postAskState.terminal !== 'running') {
+          if (flushNewCard) {
+            try {
+              await flushNewCard(postAskState);
+            } catch (err) {
+              log.fail('agent', err, { event: 'flush-new-card' });
+            }
+          }
+          break;
+        }
         continue;
       }
 

@@ -1,8 +1,15 @@
 import type { AgentRun } from '../agent/types';
+import type { AskQuestionFlow } from './ask-question-flow';
 
 export interface RunHandle {
   run: AgentRun;
   interrupted: boolean;
+  /**
+   * Bound to the run's `AskQuestionFlow` while a run is active and the
+   * underlying agent supports `AskUserQuestion`. The card dispatcher routes
+   * `__aq` button clicks here.
+   */
+  askQuestion?: AskQuestionFlow;
 }
 
 export class ActiveRuns {

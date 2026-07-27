@@ -60,7 +60,8 @@ describe('profile-aware account and config commands', () => {
 
     await h.command('/config submit', {
       message_reply: 'text',
-      show_tool_calls: 'hide',
+      tool_call_display: 'hide',
+      tool_call_display_in_groups: 'compact',
       max_concurrent_runs: '7',
       run_idle_timeout_minutes: '15',
       require_mention_in_group: 'no',
@@ -76,10 +77,14 @@ describe('profile-aware account and config commands', () => {
     expect(root.profiles.claude?.preferences).toMatchObject({
       messageReply: 'text',
       messageReplyMigrated: true,
-      showToolCalls: false,
+      toolCallDisplay: 'hide',
+      toolCallDisplayInGroups: 'compact',
       maxConcurrentRuns: 7,
       runIdleTimeoutMinutes: 15,
     });
+    // The legacy boolean is dropped on submit so the canonical tri-state is
+    // the single source of truth.
+    expect(root.profiles.claude?.preferences).not.toHaveProperty('showToolCalls');
     expect(root.profiles.claude?.access.requireMentionInGroup).toBe(false);
     expect(root.profiles.claude?.larkCli.identityPreset).toBe('user-default');
     expect(root.profiles.claude?.larkCli.localUserImport).toMatchObject({
@@ -97,7 +102,7 @@ describe('profile-aware account and config commands', () => {
 
     await h.command('/config submit', {
       message_reply: 'text',
-      show_tool_calls: 'hide',
+      tool_call_display: 'hide',
       max_concurrent_runs: '7',
       run_idle_timeout_minutes: '15',
       require_mention_in_group: 'no',
@@ -132,7 +137,7 @@ describe('profile-aware account and config commands', () => {
 
     await h.command('/config submit', {
       message_reply: 'text',
-      show_tool_calls: 'hide',
+      tool_call_display: 'hide',
       max_concurrent_runs: '7',
       run_idle_timeout_minutes: '15',
       require_mention_in_group: 'no',

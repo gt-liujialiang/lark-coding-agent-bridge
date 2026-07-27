@@ -18,6 +18,9 @@ For a product walkthrough, see the [Feishu document](https://larkcommunity.feish
 
 ## Prerequisites
 
+- macOS or Linux. **Windows is not supported as of 0.4.0** (the Claude adapter
+  now relies on a PTY-based session manager that is not validated on Windows).
+  Codex is unaffected.
 - Node.js **>= 20.12.0**
 - At least one local agent installed and logged in:
   - Claude Code: `claude`, see https://docs.anthropic.com/en/docs/claude-code/quickstart
@@ -181,6 +184,14 @@ This is a profile-field snippet. Do not replace the whole `config.json` with it;
 ```
 
 The bridge checks that a selected directory exists, is a directory, and is not an overly broad location such as `/`, the home root, a system directory, or a temp root. The working directory is only the current directory for an agent run. It is not a filesystem sandbox; actual file access still depends on the local agent process and its permission mode.
+
+### How Claude sessions are persisted
+
+The Claude adapter now keeps one long-lived `claude` TUI session per Lark
+conversation, driven via a PTY. Conversation logs land at
+`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (the standard
+location `claude` already uses interactively). `/new`, `/cd`, and `/reset`
+close the matching PTY; idle PTYs are reaped after 30 minutes.
 
 ## Permission modes
 

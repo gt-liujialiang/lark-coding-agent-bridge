@@ -14,6 +14,8 @@ interface TextGroup {
 }
 type Group = ToolGroup | TextGroup;
 
+export type ToolDisplayMode = 'full' | 'compact' | 'hide';
+
 export interface RunCardRenderOptions {
   signCallback?: (action: string) => string;
   /**
@@ -39,10 +41,19 @@ export interface RunCardRenderOptions {
    * state, 👍/👎 counts) wouldn't render. Full replaces don't need it.
    */
   staticMode?: boolean;
+  /**
+   * Tool-call rendering mode. `'full'` (default) keeps the existing behavior;
+   * `'compact'` emits header-only one-liners (no input/output bodies); `'hide'`
+   * skips tool groups entirely. The footer still surfaces tool activity via
+   * `🧰 正在调用工具` so the user sees progress even in `'hide'` mode. Ignored
+   * when `compactActivity` is set (that mode suppresses tool groups outright).
+   */
+  toolDisplay?: ToolDisplayMode;
 }
 
 export function renderCard(state: RunState, options: RunCardRenderOptions = {}): object {
   const elements: object[] = [];
+  const toolDisplay: ToolDisplayMode = options.toolDisplay ?? 'full';
 
   if (!options.compactActivity && state.reasoning.content) {
     elements.push(reasoningPanel(state.reasoning.content, state.reasoning.active));
@@ -53,8 +64,10 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
       if (group.content.trim()) {
         elements.push(markdown(group.content));
       }
-    } else if (!options.compactActivity) {
-      elements.push(...renderToolGroup(group.tools, state.terminal !== 'running'));
+    } else if (!options.compactActivity && toolDisplay !== 'hide') {
+      elements.push(
+        ...renderToolGroup(group.tools, state.terminal !== 'running', toolDisplay),
+      );
     }
   }
 
@@ -157,8 +170,19 @@ function* groupBlocks(blocks: Block[]): Generator<Group> {
   if (toolBuf.length > 0) yield { kind: 'tools', tools: toolBuf };
 }
 
-function renderToolGroup(tools: ToolEntry[], finalized: boolean): object[] {
+function renderToolGroup(
+  tools: ToolEntry[],
+  finalized: boolean,
+  mode: ToolDisplayMode,
+): object[] {
   if (tools.length === 0) return [];
+  if (mode === 'compact') {
+    // Header-only rendering: every tool becomes one notation-sized markdown
+    // line. Skip the collapsible panels and "latest visible" expansion
+    // entirely — compact mode's whole point is that all tools collapse to
+    // their headers.
+    return [compactToolList(tools, finalized)];
+  }
   if (tools.length < COLLAPSE_TOOL_THRESHOLD) {
     return tools.map((t) => toolPanel(t, false));
   }
@@ -172,6 +196,15 @@ function renderToolGroup(tools: ToolEntry[], finalized: boolean): object[] {
   if (prior.length > 0) out.push(collapsedToolSummary(prior, false));
   if (latest) out.push(toolPanel(latest, true));
   return out;
+}
+
+/**
+ * Compact mode: each tool becomes a single markdown line (icon + name +
+ * short summary). No collapsible panel, no body. Cheap to scan in groups.
+ */
+function compactToolList(tools: ToolEntry[], _finalized: boolean): object {
+  const lines = tools.map((t) => `- ${toolHeaderText(t)}`).join('\n');
+  return { tag: 'markdown', content: lines, text_size: 'notation' };
 }
 
 function reasoningPanel(content: string, active: boolean): object {

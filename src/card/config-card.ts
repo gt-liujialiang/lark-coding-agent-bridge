@@ -1,10 +1,13 @@
 import type { KnownChat } from '../bot/lark-info';
 import type { LarkCliIdentityPreset } from '../config/profile-schema';
-import type { MessageReplyMode } from '../config/schema';
+import type { MessageReplyMode, ToolCallDisplay } from '../config/schema';
 
 export interface ConfigFormOpts {
   messageReply: MessageReplyMode;
-  showToolCalls: boolean;
+  /** Base tool-call display mode (applies to p2p and to groups when no group override is set). */
+  toolCallDisplay: ToolCallDisplay;
+  /** Group-specific override. `'inherit'` means "use the base value". */
+  toolCallDisplayInGroups: ToolCallDisplay | 'inherit';
   maxConcurrentRuns: number;
   /** 0 means "disabled". */
   runIdleTimeoutMinutes: number;
@@ -127,15 +130,35 @@ export function configFormCard(opts: ConfigFormOpts): object {
               tag: 'markdown',
               content:
                 '\n**工具调用显示**\n' +
-                '_显示:可以看到 bot 跑了什么命令、读了哪些文件等过程_\n' +
-                '_隐藏:只看 agent 最终的文字答复,跳过所有工具块_',
+                '_紧凑(默认):只显示工具名和简短摘要,占用最少篇幅_\n' +
+                '_完整:可展开查看每个工具的输入参数和输出_\n' +
+                '_隐藏:跳过所有工具块,只保留 agent 的文字回复_',
             },
             {
               tag: 'select_static',
-              name: 'show_tool_calls',
-              initial_option: opts.showToolCalls ? 'show' : 'hide',
+              name: 'tool_call_display',
+              initial_option: opts.toolCallDisplay,
               options: [
-                { text: { tag: 'plain_text', content: '显示(默认)' }, value: 'show' },
+                { text: { tag: 'plain_text', content: '紧凑(默认)' }, value: 'compact' },
+                { text: { tag: 'plain_text', content: '完整' }, value: 'full' },
+                { text: { tag: 'plain_text', content: '隐藏' }, value: 'hide' },
+              ],
+            },
+            {
+              tag: 'markdown',
+              content:
+                '\n**群里的工具调用显示**\n' +
+                '_群和话题群里使用单独的显示模式;默认两边都「紧凑」,如想在私聊看完整参数可把上方改「完整」、这里保持「紧凑」_\n' +
+                '_跟随上方:群内沿用「工具调用显示」的设置_',
+            },
+            {
+              tag: 'select_static',
+              name: 'tool_call_display_in_groups',
+              initial_option: opts.toolCallDisplayInGroups,
+              options: [
+                { text: { tag: 'plain_text', content: '跟随上方(默认)' }, value: 'inherit' },
+                { text: { tag: 'plain_text', content: '完整' }, value: 'full' },
+                { text: { tag: 'plain_text', content: '紧凑' }, value: 'compact' },
                 { text: { tag: 'plain_text', content: '隐藏' }, value: 'hide' },
               ],
             },
@@ -268,6 +291,12 @@ export function configSavedCard(opts: ConfigFormOpts): object {
         : '纯文本';
   const summarize = (list: string[]): string =>
     list.length === 0 ? '_(空)_' : `${list.length} 项`;
+  const toolDisplayLabel = (v: ToolCallDisplay): string =>
+    v === 'full' ? '完整' : v === 'compact' ? '紧凑' : '隐藏';
+  const groupOverrideLabel =
+    opts.toolCallDisplayInGroups === 'inherit'
+      ? `跟随上方(${toolDisplayLabel(opts.toolCallDisplay)})`
+      : toolDisplayLabel(opts.toolCallDisplayInGroups);
   return {
     schema: '2.0',
     config: { summary: { content: '偏好已保存' } },
@@ -278,7 +307,8 @@ export function configSavedCard(opts: ConfigFormOpts): object {
           content:
             '✅ **偏好已保存**\n\n' +
             `**消息回复方式**:${replyLabel}\n` +
-            `**工具调用显示**:\`${opts.showToolCalls ? 'show' : 'hide'}\`\n` +
+            `**工具调用显示**:\`${toolDisplayLabel(opts.toolCallDisplay)}\`\n` +
+            `**群里的工具调用显示**:\`${groupOverrideLabel}\`\n` +
             `**并发上限**:\`${opts.maxConcurrentRuns}\`\n` +
             `**run 探活**:\`${opts.runIdleTimeoutMinutes > 0 ? `${opts.runIdleTimeoutMinutes} 分钟` : '关闭'}\`\n` +
             `**群里需要 @ bot**:\`${opts.requireMentionInGroup ? '是' : '否'}\`\n` +

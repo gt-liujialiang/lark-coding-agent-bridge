@@ -15,7 +15,7 @@ import { SessionCatalog, type SessionCatalogIdentity } from '../../../src/sessio
 import { SessionStore } from '../../../src/session/store.js';
 import { WorkspaceStore } from '../../../src/workspace/store.js';
 import type { CodexThreadHistoryEntry } from '../../../src/session/codex-history.js';
-import type { SessionSummary } from '../../../src/session/history.js';
+import type { GlobalSessionSummary, SessionSummary } from '../../../src/session/history.js';
 import { createFakeAgent } from '../../helpers/fake-agent.js';
 import { createFakeChannel, type FakeChannel } from '../../helpers/fake-channel.js';
 import { createTmpProfile, type TmpProfile } from '../../helpers/tmp-profile.js';
@@ -29,6 +29,7 @@ interface Harness {
   controls: Controls;
   identity: SessionCatalogIdentity;
   claudeHistory: SessionSummary[];
+  claudeAllHistory: GlobalSessionSummary[];
   codexHistory: CodexThreadHistoryEntry[];
   activeRuns: ActiveRuns;
   pending: PendingQueue;
@@ -257,6 +258,145 @@ describe('agent-aware resume commands', () => {
     expect(status).not.toContain('未建立');
   });
 
+  it('/resume all lists sessions across cwds with cwd labels in the card', async () => {
+    const h = await createHarness('claude');
+    h.claudeAllHistory.push(
+      {
+        sessionId: 'sess-terminal-a',
+        mtime: 1_700_000_200_000,
+        preview: 'work in project A',
+        lineCount: 42,
+        cwd: '/Users/me/proj-a',
+        cwdLabel: '~/proj-a',
+      },
+      {
+        sessionId: 'sess-terminal-b',
+        mtime: 1_700_000_100_000,
+        preview: 'work in project B',
+        lineCount: 17,
+        cwd: '/Users/me/proj-b',
+        cwdLabel: '~/proj-b',
+      },
+    );
+
+    await expect(h.run('/resume all')).resolves.toBe(true);
+    const rendered = JSON.stringify(lastContent(h.channel));
+    expect(rendered).toContain('扫描了 `~/.claude/projects/`');
+    expect(rendered).toContain('work in project A');
+    expect(rendered).toContain('work in project B');
+    expect(rendered).toContain('~/proj-a');
+    expect(rendered).toContain('~/proj-b');
+    // The actual session ids must not leak as the button arg — only the
+    // nonces should appear there.
+    const nonces = resumeArgsFromCard(lastContent(h.channel));
+    expect(nonces).toHaveLength(2);
+    expect(nonces).not.toContain('sess-terminal-a');
+    expect(nonces).not.toContain('sess-terminal-b');
+  });
+
+  it('/resume all groups sessions by directory in collapsible panels, first group expanded', async () => {
+    const h = await createHarness('claude');
+    // Two cwds, three sessions total. Most recent (proj-a) should be first
+    // panel and start expanded; proj-b panel comes after and starts collapsed.
+    h.claudeAllHistory.push(
+      {
+        sessionId: 'a1',
+        mtime: 1_700_000_500_000,
+        preview: 'A first',
+        lineCount: 10,
+        cwd: '/Users/me/proj-a',
+        cwdLabel: '~/proj-a',
+      },
+      {
+        sessionId: 'a2',
+        mtime: 1_700_000_400_000,
+        preview: 'A second',
+        lineCount: 20,
+        cwd: '/Users/me/proj-a',
+        cwdLabel: '~/proj-a',
+      },
+      {
+        sessionId: 'b1',
+        mtime: 1_700_000_300_000,
+        preview: 'B only',
+        lineCount: 30,
+        cwd: '/Users/me/proj-b',
+        cwdLabel: '~/proj-b',
+      },
+    );
+
+    await expect(h.run('/resume all')).resolves.toBe(true);
+    const card = (lastContent(h.channel) as { card: { elements: object[] } }).card;
+    const panels = card.elements.filter(
+      (el) => (el as { tag?: string }).tag === 'collapsible_panel',
+    ) as Array<{ expanded: boolean; header: { title: { content: string } }; elements: object[] }>;
+
+    expect(panels).toHaveLength(2);
+    expect(panels[0]!.header.title.content).toContain('~/proj-a');
+    expect(panels[0]!.header.title.content).toContain('2 条');
+    expect(panels[0]!.expanded).toBe(true);
+    expect(panels[1]!.header.title.content).toContain('~/proj-b');
+    expect(panels[1]!.header.title.content).toContain('1 条');
+    expect(panels[1]!.expanded).toBe(false);
+
+    // Both A entries live inside the first panel — verify by looking for
+    // their previews in the panel's elements rather than the card root.
+    const groupAText = JSON.stringify(panels[0]!.elements);
+    expect(groupAText).toContain('A first');
+    expect(groupAText).toContain('A second');
+    expect(groupAText).not.toContain('B only');
+  });
+
+  it('/resume all falls back to a flat list when every result is under the same cwd', async () => {
+    const h = await createHarness('claude');
+    h.claudeAllHistory.push(
+      {
+        sessionId: 'only-a',
+        mtime: 1_700_000_500_000,
+        preview: 'A only',
+        lineCount: 10,
+        cwd: '/Users/me/proj-a',
+        cwdLabel: '~/proj-a',
+      },
+    );
+
+    await expect(h.run('/resume all')).resolves.toBe(true);
+    const card = (lastContent(h.channel) as { card: { elements: object[] } }).card;
+    const panels = card.elements.filter(
+      (el) => (el as { tag?: string }).tag === 'collapsible_panel',
+    );
+    expect(panels).toHaveLength(0);
+    // Cwd still visible — falls through to the flat per-entry cwd line.
+    expect(JSON.stringify(card)).toContain('~/proj-a');
+  });
+
+  it('/resume use <cross-cwd-nonce> switches the chat workspace cwd and binds the resumed session', async () => {
+    const h = await createHarness('claude');
+    const terminalCwd = '/Users/me/elsewhere';
+    h.claudeAllHistory.push({
+      sessionId: 'sess-terminal',
+      mtime: 1_700_000_200_000,
+      preview: 'terminal work',
+      lineCount: 9,
+      cwd: terminalCwd,
+      cwdLabel: '~/elsewhere',
+    });
+
+    await expect(h.run('/resume all')).resolves.toBe(true);
+    const [nonce] = resumeArgsFromCard(lastContent(h.channel));
+    expect(nonce).toBeTypeOf('string');
+
+    // Before apply: chat is bound to tmp.workspace, NOT to the terminal cwd.
+    expect(h.workspaces.cwdFor('chat-1')).toBe(h.tmp.workspace);
+
+    await expect(h.run(`/resume use ${nonce}`)).resolves.toBe(true);
+
+    // After apply: workspace cwd moved, session bound at the new cwd.
+    expect(h.workspaces.cwdFor('chat-1')).toBe(terminalCwd);
+    expect(h.sessions.resumeFor('chat-1', terminalCwd)).toBe('sess-terminal');
+    expect(lastMarkdown(h.channel)).toContain('已完成');
+  });
+
   it('does not list local history from home when no workspace is bound', async () => {
     const h = await createHarness('claude', { bindWorkspace: false, defaultWorkspace: false });
 
@@ -276,6 +416,7 @@ async function createHarness(
   const workspaces = new WorkspaceStore(join(tmp.profile, 'workspaces.json'));
   const catalog = new SessionCatalog(join(tmp.profile, 'session-catalog.json'));
   const claudeHistory: SessionSummary[] = [];
+  const claudeAllHistory: GlobalSessionSummary[] = [];
   const codexHistory: CodexThreadHistoryEntry[] = [];
   const activeRuns = new ActiveRuns();
   const pending = new PendingQueue(60_000, () => {});
@@ -321,6 +462,7 @@ async function createHarness(
       activeRuns,
       controls,
       claudeHistoryProvider: async () => claudeHistory,
+      claudeAllHistoryProvider: async () => claudeAllHistory,
       codexHistoryProvider: async () => codexHistory,
     });
 
@@ -353,6 +495,7 @@ async function createHarness(
     controls,
     identity,
     claudeHistory,
+    claudeAllHistory,
     codexHistory,
     activeRuns,
     pending,

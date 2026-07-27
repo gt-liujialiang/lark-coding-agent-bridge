@@ -33,6 +33,8 @@ export interface StartRunFlowInput {
   workspaces: WorkspaceStore;
   executor: RunExecutor;
   now: number;
+  chatMode?: 'p2p' | 'group' | 'topic';
+  claudeP2pAutoApprove?: boolean;
   stopGraceMs?: number;
   observability?: {
     profile: string;
@@ -100,6 +102,8 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
     now: input.now,
     codexHome: input.profileConfig.codex?.codexHome,
     inheritCodexHome: input.profileConfig.codex?.inheritCodexHome,
+    chatMode: input.chatMode,
+    claudeP2pAutoApprove: input.claudeP2pAutoApprove,
   });
   if (!policy.ok) {
     return {

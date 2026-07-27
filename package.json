@@ -38,6 +38,7 @@
     "test:process": "vitest run tests/process --passWithNoTests",
     "ci:local": "git diff --check && pnpm test && pnpm typecheck && pnpm build",
     "ci:platform": "pnpm test && pnpm typecheck && pnpm build",
+    "postinstall": "node -e \"const{existsSync,chmodSync}=require('fs'),{join}=require('path'),h=join(require.resolve('node-pty/package.json'),'../prebuilds/darwin-arm64/spawn-helper');if(existsSync(h))chmodSync(h,0o755);\"",
     "prepare": "npm run build",
     "prepublishOnly": "pnpm typecheck && pnpm build"
   },
@@ -47,6 +48,7 @@
     "commander": "^12.1.0",
     "cross-spawn": "^7.0.6",
     "graceful-fs": "^4.2.11",
+    "node-pty": "^1.0.0",
     "proper-lockfile": "^4.1.2",
     "qrcode-terminal": "^0.12.0"
   },
@@ -66,6 +68,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
+      "node-pty",
       "protobufjs"
     ]
   },
