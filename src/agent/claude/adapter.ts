@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
-import { existsSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { createInterface } from 'node:readline';
+import type { Readable } from 'node:stream';
 import { log } from '../../core/logger';
+import { mergeProcessEnv, spawnProcess, type SpawnedProcessByStdio } from '../../platform/spawn';
 import { buildBridgeSystemPrompt } from '../bridge-system-prompt';
 import { buildLarkChannelEnv, type LarkChannelEnvContext } from '../lark-channel-env';
 import { checkAgentAvailability, type AgentAvailability } from '../preflight';
@@ -13,43 +13,26 @@ import {
   type AgentRun,
   type AgentRunOptions,
 } from '../types';
-import { sessionJsonlPath } from './jsonl-path';
-import { PtySession } from './pty-session';
-import { ClaudePtyPool, type PtySessionLike } from './pty-pool';
-import { spawnPty } from './pty';
+import { createStreamJsonTranslator } from './stream-json';
 
-export interface ClaudeAdapterOptions {
+export interface ClaudeHeadlessAdapterOptions {
   binary?: string;
   larkChannel?: LarkChannelEnvContext;
-  /** Test-only: override $HOME for the JSONL path. */
-  homeOverride?: string;
-  /** Test-only: extra env to pass into the spawned claude. */
-  env?: Record<string, string>;
-  /** Test-only: override the first-turn readiness quiet window (ms). 0 = skip. */
-  readinessQuietMs?: number;
 }
 
-export class ClaudeAdapter implements AgentAdapter {
+type ClaudeChild = SpawnedProcessByStdio<null, Readable, Readable>;
+
+export class ClaudeHeadlessAdapter implements AgentAdapter {
   readonly id = 'claude';
-  readonly displayName = 'Claude Code';
+  readonly displayName = 'Claude Code (headless)';
 
   private readonly binary: string;
   private readonly larkChannel: LarkChannelEnvContext | undefined;
-  private readonly homeOverride: string | undefined;
-  private readonly extraEnv: Record<string, string>;
-  private readonly readinessQuietMs: number | undefined;
   private botIdentity: AgentBotIdentity | undefined;
-  private readonly pool: ClaudePtyPool;
 
-  constructor(opts: ClaudeAdapterOptions = {}) {
+  constructor(opts: ClaudeHeadlessAdapterOptions = {}) {
     this.binary = opts.binary ?? 'claude';
     this.larkChannel = opts.larkChannel;
-    this.homeOverride = opts.homeOverride;
-    this.extraEnv = opts.env ?? {};
-    this.readinessQuietMs = opts.readinessQuietMs;
-    this.pool = new ClaudePtyPool({
-      factory: (input) => this.spawnSession(input.cwd, input.sessionId, input.model, input.permissionMode),
-    });
   }
 
   setBotIdentity(identity: AgentBotIdentity): void {
@@ -69,137 +52,213 @@ export class ClaudeAdapter implements AgentAdapter {
     });
   }
 
-  async closeSession(sessionId: string): Promise<void> {
-    await this.pool.release(sessionId);
-  }
-
   run(opts: AgentRunOptions): AgentRun {
-    if (!opts.cwd) throw new Error('cwd is required for ClaudeAdapter.run');
-    const cwd = opts.cwd;
-    const stopGraceMs = opts.stopGraceMs ?? 5000;
+    if (!opts.cwd) {
+      throw new Error('cwd is required for ClaudeAdapter.run');
+    }
 
-    let session: PtySession | undefined;
-    let acquired: Promise<PtySession> | undefined;
-    let acquiredId: string | undefined;
-    const acquire = (): Promise<PtySession> => {
-      if (!acquired) {
-        acquired = this.pool
-          .acquire({ cwd, sessionId: opts.sessionId, model: opts.model, permissionMode: opts.permissionMode })
-          .then((s) => {
-            session = s as PtySession;
-            acquiredId = session.sessionId;
-            return session;
-          });
-      }
-      return acquired;
-    };
+    const args = [
+      '-p',
+      opts.prompt,
+      '--output-format',
+      'stream-json',
+      '--verbose',
+      // Token-level deltas — without this, stream-json only emits whole
+      // assistant messages and the final answer pops in all at once.
+      '--include-partial-messages',
+      '--permission-mode',
+      opts.permissionMode ?? CLAUDE_DEFAULT_PERMISSION_MODE,
+      '--append-system-prompt',
+      buildBridgeSystemPrompt(this.botIdentity),
+    ];
+    if (opts.sessionId) args.push('--resume', opts.sessionId);
+    if (opts.model) args.push('--model', opts.model);
 
-    const events = (async function* (
-      adapter: ClaudeAdapter,
-    ): AsyncGenerator<AgentEvent> {
-      let s: PtySession;
-      try {
-        s = await acquire();
-      } catch (err) {
-        yield {
-          type: 'error',
-          message: `failed to spawn claude: ${err instanceof Error ? err.message : String(err)}`,
-          terminationReason: 'failed',
-        };
-        return;
-      }
-      // Fresh session: surface the assigned sessionId so the bridge can persist it.
-      if (!opts.sessionId) {
-        yield { type: 'system', sessionId: s.sessionId, cwd: s.cwd };
-      }
-      try {
-        for await (const ev of s.runTurn(opts.prompt)) {
-          yield ev;
-          if (ev.type === 'error' && ev.terminationReason === 'failed') {
-            await adapter.pool.release(s.sessionId);
-            return;
-          }
+    const child = spawnProcess(this.binary, args, {
+      cwd: opts.cwd,
+      env: mergeProcessEnv(process.env, buildLarkChannelEnv(this.larkChannel)),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }) as ClaudeChild;
+
+    log.info('agent', 'spawn', {
+      pid: child.pid ?? null,
+      cwd: opts.cwd ?? process.cwd(),
+      hasSession: Boolean(opts.sessionId),
+      promptChars: opts.prompt.length,
+      model: opts.model,
+    });
+
+    // Listeners MUST be attached synchronously here, before we return.
+    // The 'error' and exit-related events can fire in the next tick; if we
+    // defer attachment to the async-generator body, those events fire into
+    // the void and the generator hangs.
+    const stderrChunks: Buffer[] = [];
+    let runtimeError: Error | null = null;
+    let stderrBuffer = '';
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderrChunks.push(chunk);
+      stderrBuffer += chunk.toString('utf8');
+      let nl = stderrBuffer.indexOf('\n');
+      while (nl !== -1) {
+        const line = stderrBuffer.slice(0, nl);
+        stderrBuffer = stderrBuffer.slice(nl + 1);
+        if (line.trim()) log.warn('agent', 'stderr', { line });
+        if (isWindowsCommandNotFoundLine(line)) {
+          runtimeError = new Error(`failed to spawn claude: ${line.trim()}`);
+          child.stdout.destroy();
+          child.kill();
         }
-      } finally {
-        if (acquiredId) adapter.pool.touch(acquiredId);
+        nl = stderrBuffer.indexOf('\n');
       }
-    })(this);
+    });
+
+    child.on('error', (err) => {
+      runtimeError = err;
+    });
+    child.on('exit', (code, signal) => {
+      log.info('agent', 'exit', { pid: child.pid ?? null, code, signal });
+    });
+
+    // Default 5s if caller didn't specify — claude often has live
+    // subprocesses (lark-cli waiting for OAuth, long Bash, etc.) and the
+    // old 500ms was nowhere near enough for them to flush state before the
+    // SIGKILL cascade. Callers (channel.ts, /doctor) override per-run with
+    // a value derived from preferences.
+    const stopGraceMs = opts.stopGraceMs ?? 5000;
 
     return {
       runId: opts.runId,
-      events,
+      events: createEventStream(child, stderrChunks, () => runtimeError),
       async stop() {
-        if (!session) {
-          try { session = await acquire(); } catch { return; }
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        log.info('agent', 'stop-sigterm', { pid: child.pid ?? null, graceMs: stopGraceMs });
+        child.kill('SIGTERM');
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            if (child.exitCode === null && child.signalCode === null) {
+              log.warn('agent', 'stop-sigkill', {
+                pid: child.pid ?? null,
+                graceMs: stopGraceMs,
+                reason: 'grace-period-expired',
+              });
+              child.kill('SIGKILL');
+            }
+            resolve();
+          }, stopGraceMs);
+          child.once('exit', () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+      },
+      waitForExit(timeoutMs: number): Promise<boolean> {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          return Promise.resolve(true);
         }
-        // Use terminate() (soft + escalated hard) rather than raw
-        // softInterrupt: a user clicking [立即终止] on a checkpoint card
-        // expects the turn to *actually* end. If ESC gets eaten by a hung
-        // TUI / paste-mode the soft path silently no-ops, and without
-        // escalation the chat queue would stay locked indefinitely.
-        await session.terminate(stopGraceMs);
-      },
-      async waitForExit(_timeoutMs: number): Promise<boolean> {
-        // PTY world: "exit" === "current turn done". The caller already
-        // drained events before reaching here, so the turn is by definition
-        // complete; the PTY itself is meant to stay alive.
-        return true;
-      },
-      async answerQuestion(answer) {
-        if (!session) {
-          try { session = await acquire(); } catch { return; }
-        }
-        await session.answerAskUserQuestion(answer);
-      },
-      async resetIdleCheckpoint() {
-        // Only meaningful if the session already exists. The acquire path
-        // would spawn a new PTY just to reset state on it, which is wrong:
-        // if no session is bound, there's no turn to keep waiting for.
-        if (!session) return;
-        session.resetIdleCheckpoint();
+        return new Promise<boolean>((resolve) => {
+          const onExit = (): void => {
+            clearTimeout(timer);
+            resolve(true);
+          };
+          const timer = setTimeout(() => {
+            child.removeListener('exit', onExit);
+            resolve(false);
+          }, timeoutMs);
+          child.once('exit', onExit);
+        });
       },
     };
   }
+}
 
-  private async spawnSession(cwdRaw: string, sessionIdHint: string | undefined, model?: string, permissionMode?: string): Promise<PtySessionLike> {
-    // Resolve symlinks so the JSONL path we compute matches what the claude
-    // process sees from process.cwd() (e.g. /var → /private/var on macOS).
-    let cwd = cwdRaw;
-    try { cwd = realpathSync(cwdRaw); } catch (err) {
-      log.warn('agent', 'claude-pty-realpath-failed', {
-        cwd: cwdRaw,
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-    const sessionId = sessionIdHint ?? randomUUID();
-    const resume = sessionIdHint !== undefined && existsSync(
-      sessionJsonlPath({ home: this.homeOverride ?? homedir(), cwd, sessionId }),
-    );
-
-    const args = [
-      '--permission-mode', permissionMode ?? CLAUDE_DEFAULT_PERMISSION_MODE,
-      ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
-      '--append-system-prompt', buildBridgeSystemPrompt(this.botIdentity),
-      // model is bound at PTY-spawn time; pool hits reuse the existing PTY as-is.
-      ...(model ? ['--model', model] : []),
-    ];
-
-    log.info('agent', 'claude-pty-spawn', { sessionId, cwd, resume });
-
-    const env = {
-      ...process.env,
-      ...(this.homeOverride ? { HOME: this.homeOverride } : {}),
-      ...buildLarkChannelEnv(this.larkChannel),
-      ...this.extraEnv,
-    } as Record<string, string | undefined>;
-
-    const pty = spawnPty({ file: this.binary, args, cwd, env });
-    return new PtySession({
-      pty,
-      cwd,
-      sessionId,
-      ...(this.homeOverride ? { home: this.homeOverride } : {}),
-      ...(this.readinessQuietMs !== undefined ? { readinessQuietMs: this.readinessQuietMs } : {}),
-    });
+async function* createEventStream(
+  child: ClaudeChild,
+  stderrChunks: Buffer[],
+  getError: () => Error | null,
+): AsyncGenerator<AgentEvent> {
+  // If fork itself failed synchronously, child.pid is undefined. The 'error'
+  // event (ENOENT etc.) fires in the next tick, so also check getError().
+  if (!child.pid) {
+    const err = getError();
+    yield {
+      type: 'error',
+      message: err ? `failed to spawn claude: ${err.message}` : 'spawn returned no pid',
+      terminationReason: 'failed',
+    };
+    return;
   }
+
+  const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const translate = createStreamJsonTranslator();
+  let sawStdout = false;
+  let silentExitTimer: ReturnType<typeof setTimeout> | undefined;
+  const closeSilentStdout = (): void => {
+    silentExitTimer = setTimeout(() => {
+      if (!sawStdout && !child.stdout.readableEnded) child.stdout.destroy();
+    }, 50);
+  };
+  child.once('exit', closeSilentStdout);
+  try {
+    for await (const line of rl) {
+      sawStdout = true;
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+      yield* translate(parsed);
+    }
+  } finally {
+    if (silentExitTimer) clearTimeout(silentExitTimer);
+    child.removeListener('exit', closeSilentStdout);
+    rl.close();
+  }
+
+  const earlyRuntimeError = getError();
+  if (earlyRuntimeError && child.exitCode === null && child.signalCode === null) {
+    yield {
+      type: 'error',
+      message: `claude runtime error: ${earlyRuntimeError.message}`,
+      terminationReason: 'failed',
+    };
+    return;
+  }
+
+  // When the child is killed by a signal, exitCode stays null and signalCode
+  // carries the name. Both must be checked or we'll attach an 'exit' listener
+  // for an event that already fired and hang forever.
+  const exitCode = await new Promise<number | null>((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve(child.exitCode);
+    } else {
+      child.once('exit', (code) => resolve(code));
+    }
+  });
+
+  const runtimeError = getError();
+  if (exitCode !== 0 && exitCode !== null) {
+    const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
+    const detail = stderr ? `: ${stderr.slice(0, 500)}` : '';
+    yield {
+      type: 'error',
+      message: `claude exited with code ${exitCode}${detail}`,
+      terminationReason: 'failed',
+    };
+  } else if (runtimeError) {
+    yield {
+      type: 'error',
+      message: `claude runtime error: ${runtimeError.message}`,
+      terminationReason: 'failed',
+    };
+  }
+}
+
+function isWindowsCommandNotFoundLine(line: string): boolean {
+  return (
+    process.platform === 'win32' &&
+    /is not recognized as an internal or external command|operable program or batch file/i.test(line)
+  );
 }

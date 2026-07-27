@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ClaudeAdapter } from '../../../src/agent/claude/adapter.js';
+import { ClaudePtyAdapter } from '../../../src/agent/claude/pty-adapter.js';
 import type { AgentEvent } from '../../../src/agent/types.js';
 
 const fakeBinary = fileURLToPath(new URL('../../fixtures/claude-fake/claude.mjs', import.meta.url));
@@ -14,7 +14,7 @@ async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   return out;
 }
 
-describe('ClaudeAdapter (PTY)', () => {
+describe('ClaudePtyAdapter (PTY)', () => {
   const dirs: string[] = [];
   afterEach(async () => {
     await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
@@ -34,7 +34,7 @@ describe('ClaudeAdapter (PTY)', () => {
       ],
     ];
 
-    const adapter = new ClaudeAdapter({
+    const adapter = new ClaudePtyAdapter({
       binary: fakeBinary,
       homeOverride: home,
       readinessQuietMs: 0,
@@ -60,7 +60,7 @@ describe('ClaudeAdapter (PTY)', () => {
     const argsFile = join(tmpdir(), `claude-args-${Date.now()}.json`);
     dirs.push(home, cwd);
 
-    const adapter = new ClaudeAdapter({
+    const adapter = new ClaudePtyAdapter({
       binary: fakeBinary,
       homeOverride: home,
       readinessQuietMs: 0,
@@ -90,7 +90,7 @@ describe('ClaudeAdapter (PTY)', () => {
     const cwd = await mkdtemp(join(tmpdir(), 'claude-pty-cwd-'));
     dirs.push(home, cwd);
 
-    const adapter = new ClaudeAdapter({
+    const adapter = new ClaudePtyAdapter({
       binary: fakeBinary,
       homeOverride: home,
       readinessQuietMs: 0,

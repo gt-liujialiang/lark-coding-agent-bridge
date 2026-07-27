@@ -24,7 +24,7 @@ import {
   buildBridgeSystemPrompt,
   prefixBridgeSystemPrompt,
 } from '../../../src/agent/bridge-system-prompt';
-import { ClaudeAdapter } from '../../../src/agent/claude/adapter';
+import { ClaudePtyAdapter } from '../../../src/agent/claude/pty-adapter';
 import { CodexAdapter } from '../../../src/agent/codex/adapter';
 import type { PtyHandle } from '../../../src/agent/claude/pty';
 
@@ -70,7 +70,7 @@ beforeEach(() => {
   ptyMock.spawnPty.mockReset();
 });
 
-describe('ClaudeAdapter system prompt wiring', () => {
+describe('ClaudePtyAdapter system prompt wiring', () => {
   it('appends the identity-aware bridge system prompt after setBotIdentity', async () => {
     // spawnPty is synchronous inside spawnSession. Capture the args and handle via the mock.
     let capturedArgs: string[] | undefined;
@@ -81,7 +81,7 @@ describe('ClaudeAdapter system prompt wiring', () => {
       return capturedHandle;
     });
 
-    const adapter = new ClaudeAdapter({ readinessQuietMs: 0 });
+    const adapter = new ClaudePtyAdapter({ readinessQuietMs: 0 });
     adapter.setBotIdentity({ openId: 'ou_bot_self', name: 'Bridge' });
 
     // Start iterating events — this triggers pool.acquire → spawnSession → spawnPty.
@@ -117,7 +117,7 @@ describe('ClaudeAdapter system prompt wiring', () => {
       return capturedHandle;
     });
 
-    const adapter = new ClaudeAdapter({ readinessQuietMs: 0 });
+    const adapter = new ClaudePtyAdapter({ readinessQuietMs: 0 });
 
     const run = adapter.run({ runId: 'r1', prompt: 'hi', cwd: '/tmp' });
     const collectPromise = (async () => {
