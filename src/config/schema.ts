@@ -150,6 +150,29 @@ export interface AppPreferences {
    */
   runIdleTimeoutMinutes?: number;
   /**
+   * Hard hang ceiling for a claude turn, in minutes: if claude's JSONL stays
+   * silent this long *while no tool is in flight*, the turn is presumed hung
+   * and ends (failed) so the chat can't lock forever. Unlike
+   * `runIdleTimeoutMinutes` this cannot be disabled by an idle check-in — it
+   * is the last-resort safety net. Default 15; range [1, 120]. 0 disables.
+   */
+  turnSilenceTimeoutMinutes?: number;
+  /**
+   * Absolute wall-clock cap for a single claude turn, in minutes — a blunt
+   * backstop for a genuinely hung *tool* (in flight forever, so the silence
+   * ceiling never fires). Off by default (0) because a legitimate long
+   * agentic turn keeps writing JSONL and shouldn't be clock-killed. Range
+   * [1, 720] when set.
+   */
+  turnMaxMinutes?: number;
+  /**
+   * Auto-rotate a claude session before resume when its JSONL exceeds this
+   * many bytes: the bridge abandons the bloated session and starts a fresh
+   * one (old file kept on disk, same as `/new`). Huge sessions make resume /
+   * boot slow and fragile. Default 2_000_000 (~2 MB). 0 disables.
+   */
+  sessionRotateMaxBytes?: number;
+  /**
    * Whether the bot only responds to messages that @-mention it in groups
    * (regular and topic groups). p2p is always unrestricted. Default true:
    * groups are quiet unless the user @bot. Set false to let any group
@@ -372,4 +395,40 @@ export function getRunIdleTimeoutMs(cfg: AppConfig): number | undefined {
   if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return undefined;
   const clamped = Math.min(Math.max(Math.floor(raw), 1), 120);
   return clamped * 60_000;
+}
+
+/**
+ * Hard hang ceiling (ms) for a claude turn. Defaults to 15 min. A configured
+ * value clamps to [1, 120] minutes; an explicit 0 disables it (opt-out only —
+ * you have to ask for the bot to be able to hang forever again).
+ */
+export function getTurnSilenceTimeoutMs(cfg: AppConfig): number {
+  const raw = cfg.preferences?.turnSilenceTimeoutMinutes;
+  if (raw === 0) return 0;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return 15 * 60_000;
+  const clamped = Math.min(Math.max(Math.floor(raw), 1), 120);
+  return clamped * 60_000;
+}
+
+/**
+ * Absolute per-turn wall-clock cap (ms). Off by default (0). A configured
+ * value clamps to [1, 720] minutes.
+ */
+export function getTurnMaxMs(cfg: AppConfig): number {
+  const raw = cfg.preferences?.turnMaxMinutes;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return 0;
+  const clamped = Math.min(Math.max(Math.floor(raw), 1), 720);
+  return clamped * 60_000;
+}
+
+/**
+ * Byte size above which a claude session is rotated (fresh session) before
+ * resume. Defaults to 2 MB. An explicit 0 disables rotation. A configured
+ * value clamps to a floor of 512 KB so a typo can't rotate every turn.
+ */
+export function getSessionRotateMaxBytes(cfg: AppConfig): number {
+  const raw = cfg.preferences?.sessionRotateMaxBytes;
+  if (raw === 0) return 0;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return 2_000_000;
+  return Math.max(Math.floor(raw), 512_000);
 }

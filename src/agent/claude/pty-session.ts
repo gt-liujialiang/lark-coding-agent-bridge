@@ -34,6 +34,25 @@ export interface PtySessionOptions {
   readinessQuietMs?: number;
   /** Max wait for first-turn readiness. Default 30000ms. */
   readinessMaxMs?: number;
+  /**
+   * Hard hang ceiling (ms): if the turn's JSONL stays silent for this long
+   * *while no tool is in flight*, the turn is presumed hung and ends with a
+   * failed terminal event (the PTY is then evicted). This is the safety net
+   * that guarantees a wedged/假活 claude can never lock the chat forever —
+   * unlike `idleCheckpointsMs`, which only notifies. In-flight tools (e.g. a
+   * long build or an OAuth wait) pause the timer, and a user's "keep waiting"
+   * (`resetIdleCheckpoint`) resets it. Default 15min. 0/undefined ⇒ disabled.
+   */
+  maxSilenceMs?: number;
+  /**
+   * Absolute wall-clock cap (ms) for a single turn regardless of activity — a
+   * blunt backstop for a genuinely hung *tool* (in-flight forever, so
+   * `maxSilenceMs` never fires). Off by default because a legitimate long
+   * agentic turn keeps writing JSONL and should not be killed by the clock;
+   * enable it via config when you'd rather cap runaway turns. 0/undefined ⇒
+   * disabled.
+   */
+  maxTurnMs?: number;
 }
 
 // Startup consent dialogs claude shows on first use of a cwd / mode.
@@ -68,6 +87,12 @@ const DEFAULT_IDLE_CHECKPOINTS_MS: readonly number[] = [
 ] as const;
 const READINESS_MAX_MS = 30_000;
 const READINESS_QUIET_MS = 1_000;
+// Default hard hang ceiling: 15 min of JSONL silence with no tool in flight is
+// treated as "presumed hung" and ends the turn (failed) so the chat can't lock
+// forever. Sits just past the 2nd idle checkpoint (3min → 13min).
+const DEFAULT_MAX_SILENCE_MS = 15 * 60 * 1000;
+// Absolute per-turn wall-clock cap is off by default (see PtySessionOptions).
+const DEFAULT_MAX_TURN_MS = 0;
 
 // Strip CSI / OSC / other ANSI escape sequences from PTY output so error
 // messages we surface to users are readable plain text.
@@ -335,6 +360,26 @@ export class PtySession {
         nextCheckpointAt = Date.now() + checkpointDeltas[0]!;
       };
 
+      // Hard hang ceilings (see PtySessionOptions). `hangBaseline` tracks the
+      // start of the current uninterrupted silence: reset on new JSONL
+      // activity, while any tool is in flight, and on an explicit "keep
+      // waiting". When silence past it exceeds `maxSilenceMs` (and no tool is
+      // running) the turn is presumed hung and ends failed.
+      const maxSilenceMs = this.opts.maxSilenceMs ?? DEFAULT_MAX_SILENCE_MS;
+      const maxTurnMs = this.opts.maxTurnMs ?? DEFAULT_MAX_TURN_MS;
+      const sessionId = this.opts.sessionId;
+      const turnStartedAt = this.turnStartedAt;
+      let hangBaseline = Date.now();
+      const timeoutError = (reason: string, message: string): AgentEvent => {
+        log.warn('agent', 'claude-turn-timeout', {
+          sessionId,
+          reason,
+          idleMs: Date.now() - hangBaseline,
+          turnMs: Date.now() - turnStartedAt,
+        });
+        return { type: 'error', message, terminationReason: 'failed' };
+      };
+
       while (true) {
         if (!this.alive) {
           const tail = stripAnsi(this.rollingBuffer).trim().slice(-800);
@@ -349,6 +394,7 @@ export class PtySession {
         const { entries } = await this.reader.readNew();
         if (entries.length > 0) {
           this.lastEntryAt = Date.now();
+          hangBaseline = Date.now();
           restartCheckpointCadence();
         }
         for (const e of entries) {
@@ -364,7 +410,27 @@ export class PtySession {
         if (this.idleCheckpointResetRequested) {
           this.idleCheckpointResetRequested = false;
           this.lastEntryAt = Date.now();
+          hangBaseline = Date.now();
           restartCheckpointCadence();
+        }
+        // Hard hang ceilings. A tool in flight (long build, OAuth wait, …) is
+        // legitimate silence — pause the silence timer while any is running.
+        const inFlight = this.translator?.snapshot().inFlightTools.length ?? 0;
+        if (inFlight > 0) {
+          hangBaseline = Date.now();
+        } else if (maxSilenceMs > 0 && Date.now() - hangBaseline >= maxSilenceMs) {
+          yield timeoutError(
+            'silence',
+            '本轮处理超时（长时间无进展），已自动结束，可直接重发消息重试。',
+          );
+          return;
+        }
+        if (maxTurnMs > 0 && Date.now() - this.turnStartedAt >= maxTurnMs) {
+          yield timeoutError(
+            'wall-clock',
+            '本轮处理超时（超过单轮时长上限），已自动结束，可直接重发消息重试。',
+          );
+          return;
         }
         if (Date.now() >= nextCheckpointAt) {
           firedCheckpoints += 1;

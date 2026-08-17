@@ -388,6 +388,113 @@ describe('PtySession', () => {
     expect(checkpoints[1]!.idleMs).toBeGreaterThan(checkpoints[0]!.idleMs);
   });
 
+  it('ends the turn (error/failed) when JSONL stays silent past maxSilenceMs with no tool in flight', async () => {
+    const cwd = '/Users/me/proj';
+    const sessionId = 'sess-silence-timeout';
+    const home = await makeJsonlHome(cwd, sessionId);
+    const stub = createStubPty();
+    const session = new PtySession({
+      pty: stub.handle,
+      cwd,
+      sessionId,
+      home,
+      pollMs: 5,
+      promptDelayMs: 1,
+      readinessQuietMs: 0,
+      // Push checkpoints far out so they can't interfere with the assertion.
+      idleCheckpointsMs: [10_000],
+      maxSilenceMs: 40,
+      maxTurnMs: 0,
+    });
+
+    // Never write to the JSONL: the turn must self-terminate on the ceiling.
+    const events: AgentEvent[] = [];
+    for await (const ev of session.runTurn('hi')) events.push(ev);
+
+    const last = events.at(-1);
+    expect(last).toMatchObject({ type: 'error', terminationReason: 'failed' });
+    expect((last as Extract<AgentEvent, { type: 'error' }>).message).toContain('超时');
+  });
+
+  it('does NOT time out on silence while a tool is in flight', async () => {
+    const cwd = '/Users/me/proj';
+    const sessionId = 'sess-silence-inflight';
+    const home = await makeJsonlHome(cwd, sessionId);
+    const stub = createStubPty();
+    const jsonl = join(home, '.claude', 'projects', encodeCwdForClaudeProjects(cwd), `${sessionId}.jsonl`);
+    const session = new PtySession({
+      pty: stub.handle,
+      cwd,
+      sessionId,
+      home,
+      pollMs: 5,
+      promptDelayMs: 1,
+      readinessQuietMs: 0,
+      idleCheckpointsMs: [10_000],
+      maxSilenceMs: 30,
+      maxTurnMs: 0,
+    });
+
+    // A tool_use with no matching tool_result keeps a tool "in flight", which
+    // must pause the silence ceiling (legit long build / OAuth wait).
+    setTimeout(() => {
+      void appendFile(
+        jsonl,
+        JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'sleep 999' } }],
+          },
+        }) + '\n',
+      );
+    }, 5);
+
+    const events: AgentEvent[] = [];
+    const iter = session.runTurn('hi')[Symbol.asyncIterator]();
+    const pump = (async () => {
+      while (true) {
+        const { value, done } = await iter.next();
+        if (done) break;
+        events.push(value);
+      }
+    })();
+
+    // Wait well past 5× maxSilenceMs — a broken ceiling would have fired by now.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+
+    await session.softInterrupt(50);
+    await pump;
+    // Ended by interrupt, not by the silence ceiling.
+    expect(events.at(-1)).toMatchObject({ type: 'done', terminationReason: 'interrupted' });
+  });
+
+  it('ends the turn (error/failed) at maxTurnMs wall-clock cap', async () => {
+    const cwd = '/Users/me/proj';
+    const sessionId = 'sess-wallclock';
+    const home = await makeJsonlHome(cwd, sessionId);
+    const stub = createStubPty();
+    const session = new PtySession({
+      pty: stub.handle,
+      cwd,
+      sessionId,
+      home,
+      pollMs: 5,
+      promptDelayMs: 1,
+      readinessQuietMs: 0,
+      idleCheckpointsMs: [10_000],
+      maxSilenceMs: 0, // disable silence ceiling to isolate the wall-clock cap
+      maxTurnMs: 60,
+    });
+
+    const events: AgentEvent[] = [];
+    for await (const ev of session.runTurn('hi')) events.push(ev);
+
+    const last = events.at(-1);
+    expect(last).toMatchObject({ type: 'error', terminationReason: 'failed' });
+    expect((last as Extract<AgentEvent, { type: 'error' }>).message).toContain('单轮时长上限');
+  });
+
   it('resetIdleCheckpoint() restarts the backoff and JSONL progress prevents checkpoints', async () => {
     const cwd = '/Users/me/proj';
     const sessionId = 'sess-progress';

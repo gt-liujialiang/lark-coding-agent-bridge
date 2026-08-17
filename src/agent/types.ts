@@ -217,4 +217,11 @@ export interface AgentAdapter {
    * `sessionId` is the previously-active claude session id.
    */
   closeSession?(sessionId: string): Promise<void>;
+  /**
+   * Connector shutdown hook: release every process/resource the adapter owns
+   * (e.g. pooled PTYs and their spawned claude processes) so we don't leak
+   * them when the connector exits or restarts. Best-effort; called from the
+   * CLI stop() path.
+   */
+  shutdown?(): Promise<void>;
 }

@@ -40,6 +40,7 @@ import {
   getRequireMentionInGroup,
   getReplyInThreadInGroup,
   getRunIdleTimeoutMs,
+  getSessionRotateMaxBytes,
   getToolCallDisplay,
 } from '../config/schema';
 import { resolveAppSecret } from '../config/secret-resolver';
@@ -742,6 +743,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     chatMode: mode,
     claudeP2pAutoApprove: getClaudeP2pAutoApprove(controls.cfg),
     stopGraceMs: getAgentStopGraceMs(controls.cfg),
+    sessionRotateMaxBytes: getSessionRotateMaxBytes(controls.cfg),
     observability: {
       profile: controls.profile,
       agent: capability.agentId,

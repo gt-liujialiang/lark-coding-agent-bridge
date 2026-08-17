@@ -1,7 +1,8 @@
-import { realpath } from 'node:fs/promises';
+import { mkdir, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { claudeCapability, codexCapability } from '../../../src/agent/capability.js';
+import { encodeCwdForClaudeProjects, sessionJsonlPath } from '../../../src/agent/claude/jsonl-path.js';
 import { ActiveRuns } from '../../../src/bot/active-runs.js';
 import { ProcessPool } from '../../../src/bot/process-pool.js';
 import {
@@ -119,6 +120,96 @@ describe('agent-aware run-flow resume', () => {
       sessionId: undefined,
       threadId: undefined,
     });
+  });
+
+  it('rotates (drops resume, starts fresh) a claude session whose JSONL exceeds the byte ceiling', async () => {
+    const h = await createHarness('claude');
+    const cwdRealpath = await realpath(h.tmp.workspace);
+
+    // A first fresh run gives us the real policy fingerprint the catalog is
+    // keyed by, so we can seed + then assert archival under the same key.
+    const first = await start(h);
+    expect(first.ok).toBe(true);
+    if (!first.ok) throw new Error('expected initial run');
+    await collect(first.execution.subscribe());
+    const fp = first.policy.policyFingerprint;
+
+    h.sessions.set('chat-1', 'huge-session', cwdRealpath);
+    h.catalog.upsertActive({
+      scopeId: 'chat-1',
+      agentId: 'claude',
+      cwdRealpath,
+      policyFingerprint: fp,
+      sessionId: 'huge-session',
+      now: 1000,
+    });
+
+    // Write an oversized JSONL under a test-only HOME.
+    const home = h.tmp.profile;
+    const jsonlDir = join(home, '.claude', 'projects', encodeCwdForClaudeProjects(cwdRealpath));
+    await mkdir(jsonlDir, { recursive: true });
+    await writeFile(sessionJsonlPath({ home, cwd: cwdRealpath, sessionId: 'huge-session' }), 'x'.repeat(5000));
+
+    const run = await startRunFlow({
+      scopeId: 'chat-1',
+      scope: { source: 'im', chatId: 'chat-1', actorId: 'ou_user' },
+      prompt: 'hello',
+      attachments: [],
+      access: { ok: true, reason: 'allowed-user' },
+      capability: claudeCapability(h.profileConfig),
+      profileConfig: h.profileConfig,
+      sessions: h.sessions,
+      sessionCatalog: h.catalog,
+      workspaces: h.workspaces,
+      executor: h.executor,
+      now: 1000,
+      sessionRotateMaxBytes: 1000,
+      homeOverride: home,
+    } satisfies StartRunFlowInput & { sessionCatalog: SessionCatalog });
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) throw new Error('expected fresh run after rotation');
+    // Resume was dropped → fresh session.
+    expect(run.resumeFrom).toBeUndefined();
+    expect(h.agent.runOptions.at(-1)).toMatchObject({ sessionId: undefined });
+    // Legacy mapping cleared and catalog entry archived.
+    expect(h.sessions.getRaw('chat-1')).toBeUndefined();
+    expect(
+      h.catalog.activeFor({ scopeId: 'chat-1', agentId: 'claude', cwdRealpath, policyFingerprint: fp }),
+    ).toBeUndefined();
+  });
+
+  it('does NOT rotate a claude session whose JSONL is under the byte ceiling', async () => {
+    const h = await createHarness('claude');
+    const cwdRealpath = await realpath(h.tmp.workspace);
+    h.sessions.set('chat-1', 'small-session', cwdRealpath);
+
+    const home = h.tmp.profile;
+    const jsonlDir = join(home, '.claude', 'projects', encodeCwdForClaudeProjects(cwdRealpath));
+    await mkdir(jsonlDir, { recursive: true });
+    await writeFile(sessionJsonlPath({ home, cwd: cwdRealpath, sessionId: 'small-session' }), 'x'.repeat(100));
+
+    const run = await startRunFlow({
+      scopeId: 'chat-1',
+      scope: { source: 'im', chatId: 'chat-1', actorId: 'ou_user' },
+      prompt: 'hello',
+      attachments: [],
+      access: { ok: true, reason: 'allowed-user' },
+      capability: claudeCapability(h.profileConfig),
+      profileConfig: h.profileConfig,
+      sessions: h.sessions,
+      sessionCatalog: h.catalog,
+      workspaces: h.workspaces,
+      executor: h.executor,
+      now: 1000,
+      sessionRotateMaxBytes: 1000,
+      homeOverride: home,
+    } satisfies StartRunFlowInput & { sessionCatalog: SessionCatalog });
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) throw new Error('expected resumed run');
+    expect(run.resumeFrom).toBe('small-session');
+    expect(h.agent.runOptions[0]).toMatchObject({ sessionId: 'small-session' });
   });
 
   it('records system session identifiers into the agent-aware catalog', async () => {

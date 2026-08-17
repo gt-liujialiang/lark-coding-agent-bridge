@@ -27,6 +27,10 @@ export interface ClaudePtyAdapterOptions {
   env?: Record<string, string>;
   /** Test-only: override the first-turn readiness quiet window (ms). 0 = skip. */
   readinessQuietMs?: number;
+  /** Hard hang ceiling per turn (ms). See PtySessionOptions.maxSilenceMs. */
+  maxSilenceMs?: number;
+  /** Absolute wall-clock cap per turn (ms). See PtySessionOptions.maxTurnMs. */
+  maxTurnMs?: number;
 }
 
 export class ClaudePtyAdapter implements AgentAdapter {
@@ -38,6 +42,8 @@ export class ClaudePtyAdapter implements AgentAdapter {
   private readonly homeOverride: string | undefined;
   private readonly extraEnv: Record<string, string>;
   private readonly readinessQuietMs: number | undefined;
+  private readonly maxSilenceMs: number | undefined;
+  private readonly maxTurnMs: number | undefined;
   private botIdentity: AgentBotIdentity | undefined;
   private readonly pool: ClaudePtyPool;
 
@@ -47,6 +53,8 @@ export class ClaudePtyAdapter implements AgentAdapter {
     this.homeOverride = opts.homeOverride;
     this.extraEnv = opts.env ?? {};
     this.readinessQuietMs = opts.readinessQuietMs;
+    this.maxSilenceMs = opts.maxSilenceMs;
+    this.maxTurnMs = opts.maxTurnMs;
     this.pool = new ClaudePtyPool({
       factory: (input) => this.spawnSession(input.cwd, input.sessionId, input.model, input.permissionMode),
     });
@@ -200,6 +208,18 @@ export class ClaudePtyAdapter implements AgentAdapter {
       sessionId,
       ...(this.homeOverride ? { home: this.homeOverride } : {}),
       ...(this.readinessQuietMs !== undefined ? { readinessQuietMs: this.readinessQuietMs } : {}),
+      ...(this.maxSilenceMs !== undefined ? { maxSilenceMs: this.maxSilenceMs } : {}),
+      ...(this.maxTurnMs !== undefined ? { maxTurnMs: this.maxTurnMs } : {}),
     });
+  }
+
+  /**
+   * Release every pooled PTY (SIGTERM → SIGKILL) and stop the idle reaper.
+   * Called on connector shutdown so we don't leak the claude processes we
+   * spawned. Best-effort and idempotent.
+   */
+  async shutdown(): Promise<void> {
+    await this.pool.closeAll();
+    this.pool.stop();
   }
 }

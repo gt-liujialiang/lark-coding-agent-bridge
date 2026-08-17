@@ -19,7 +19,12 @@ import {
   type ProfileConfig,
 } from '../../config/profile-schema';
 import type { AppConfig } from '../../config/schema';
-import { isComplete, getClaudeDriver } from '../../config/schema';
+import {
+  isComplete,
+  getClaudeDriver,
+  getTurnSilenceTimeoutMs,
+  getTurnMaxMs,
+} from '../../config/schema';
 import { configureLogger, gcOldLogs, log, reportError } from '../../core/logger';
 import { loadTelemetryAdapter, telemetry } from '../../core/telemetry';
 import { gcMediaCache } from '../../media/cache';
@@ -197,6 +202,13 @@ export async function runStart(opts: StartOptions): Promise<void> {
           } catch (err) {
             console.error('[disconnect-failed]', err);
           }
+          // Release the agent's own resources (pooled PTYs + their spawned
+          // claude processes) so a stop/restart doesn't leak them.
+          try {
+            await agent.shutdown?.();
+          } catch (err) {
+            console.error('[agent-shutdown-failed]', err);
+          }
           // unregister is best-effort sync — we're about to exit anyway.
           unregisterSync(entry.id, appPaths.userRegistryFile);
           await releaseRuntimeLocks(runtimeLocks);
@@ -285,6 +297,17 @@ export async function runStart(opts: StartOptions): Promise<void> {
                   await bridge.disconnect();
                 } catch (err) {
                   console.warn('[restart] old disconnect failed:', err);
+                }
+                // The swap orphans the old agent's PTY pool (and the claude
+                // processes it spawned). disconnect() only stops sessions with
+                // an active run, so without this every reconnect leaks a pool
+                // until the process exits. The new agent already owns the live
+                // bridge, so releasing the old one here is safe. `agent` still
+                // points at the old adapter (reassigned below).
+                try {
+                  await agent.shutdown?.();
+                } catch (err) {
+                  console.warn('[restart] old agent shutdown failed:', err);
                 }
                 bridge = next_bridge;
                 // Update while the old app lock is still held. Registry write paths
@@ -444,7 +467,10 @@ export function createRuntimeAgent(
   if (cfg && getClaudeDriver(cfg) === 'headless') {
     return new ClaudeHeadlessAdapter({ larkChannel });
   }
-  return new ClaudePtyAdapter({ larkChannel });
+  return new ClaudePtyAdapter({
+    larkChannel,
+    ...(cfg ? { maxSilenceMs: getTurnSilenceTimeoutMs(cfg), maxTurnMs: getTurnMaxMs(cfg) } : {}),
+  });
 }
 
 /**

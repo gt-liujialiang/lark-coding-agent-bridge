@@ -1,5 +1,9 @@
+import { statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import type { AgentCapability } from '../agent/capability';
 import type { AgentEvent } from '../agent/types';
+import { sessionJsonlPath } from '../agent/claude/jsonl-path';
+import { log } from '../core/logger';
 import type { ProfileConfig } from '../config/profile-schema';
 import type { AccessDecision } from '../policy/access';
 import {
@@ -36,6 +40,14 @@ export interface StartRunFlowInput {
   chatMode?: 'p2p' | 'group' | 'topic';
   claudeP2pAutoApprove?: boolean;
   stopGraceMs?: number;
+  /**
+   * Byte size above which a claude session is rotated (dropped + fresh one
+   * started) instead of resumed. 0 / undefined ⇒ never rotate. See
+   * getSessionRotateMaxBytes.
+   */
+  sessionRotateMaxBytes?: number;
+  /** Override $HOME when locating the session JSONL (tests). */
+  homeOverride?: string;
   observability?: {
     profile: string;
     agent: string;
@@ -137,6 +149,48 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
     const stale = input.sessions.getRaw(input.scopeId);
     if (!resumeFrom && stale?.cwd && stale.cwd !== workspace.cwdRealpath) {
       input.sessions.clear(input.scopeId);
+    }
+  }
+
+  // Session rotation: a claude JSONL that has grown past the configured byte
+  // ceiling is slow and fragile to resume (long boot, high RAM, higher chance
+  // of a wedged turn). Drop the resume and start fresh — the old file stays on
+  // disk, same as `/new`. Only claude sessions carry a resumable JSONL.
+  const rotateMaxBytes = input.sessionRotateMaxBytes ?? 0;
+  if (
+    rotateMaxBytes > 0 &&
+    input.capability.agentId === 'claude' &&
+    sessionId &&
+    resumeFrom === sessionId
+  ) {
+    const jsonlPath = sessionJsonlPath({
+      home: input.homeOverride ?? homedir(),
+      cwd: workspace.cwdRealpath,
+      sessionId,
+    });
+    let bytes = 0;
+    try {
+      bytes = statSync(jsonlPath).size;
+    } catch {
+      bytes = 0; // missing file ⇒ nothing to rotate; let resume/new decide.
+    }
+    if (bytes > rotateMaxBytes) {
+      log.info('agent', 'session-rotated', {
+        scope: input.scopeId,
+        sessionId,
+        bytes,
+        maxBytes: rotateMaxBytes,
+      });
+      input.sessions.clear(input.scopeId);
+      input.sessionCatalog?.archiveActive({
+        scopeId: input.scopeId,
+        agentId: 'claude',
+        cwdRealpath: workspace.cwdRealpath,
+        policyFingerprint: policy.policyFingerprint,
+        now: input.now,
+      });
+      resumeFrom = undefined;
+      sessionId = undefined;
     }
   }
 
